@@ -1,0 +1,733 @@
+---
+title: 'Annotate DEGs Lists for Leukemia Lymphoma Society'
+author: "Jenny Smith"
+date: "June 10, 2019"
+output: html_document
+---
+
+#Set-up
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.height=5, fig.width=8, dpi = 600)
+
+knitr::opts_knit$set(root.dir = file.path(PROJHOME, '2017.06.20_DEGs_RareVariants/'))
+
+
+options(stringsAsFactors = FALSE, 
+        java.parameters = "-Xmx10000m")
+```
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+library(DeGSEA)
+library(gridExtra)
+getwd()
+```
+
+```{r}
+source("~/scripts/conversion_scripts/Merge_Cat_FixDupIDs_Function.r")
+source("~/scripts/conversion_scripts/CDE_Cleaning_Utility_Functions.r")
+source("~/scripts/RNAseq_Analysis/Waterfallplots/Waterfall_Barplot_Function_2017.05.22.r")
+```
+
+
+For this list for LLS: 
+1. use the largest available RBD counts matrix N=1394 AMLs and 68 NBMs 
+2. Use DEGs for AML vs NBM comparisons - so there is some level of "AML specificity"
+3. Look for plasma membrane localization
+
+
+#Read in the Clinical Data
+
+```{r}
+merged <- read.csv("~/reference_mapping-files/TARGET_AML_0531_1031_merged_CDEs_3.01.19.csv")
+
+merged <- merged %>% 
+  filter(!is.na(USI)) %>%
+  set_rownames(.$USI)
+```
+
+
+#read in the counts 
+
+```{r}
+# cts <- readRDS("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_1031_0531_Counts_List.RDS")
+```
+
+```{r}
+TPMs <- readRDS("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_RBD_Kallisto_Quant_GeneLevel_TPM.RDS")
+rownames(TPMs) <- gsub("\\.[0-9]{1,}", "", rownames(TPMs))
+
+head(TPMs[,1:5])
+dim(TPMs)
+```
+
+```{r}
+Groups <- read.csv("/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2019.04.05_Kallisto_DE_Transcriptome_MS/TARGET_AML_RBD_Cohorts_forDE_5.20.19.csv") %>% 
+  add_row(USI=grep("^BM|^RO", colnames(TPMs), value=TRUE)) %>% 
+  mutate_at(vars(CBFA2T3.GLIS2.forDEGs:Rare.Fusions), .funs = ~ifelse(is.na(.), "NBM", .)) %>% 
+  set_colnames(gsub(".forDEGs","",colnames(.))) %>%
+  mutate(Categories=pheno_bars(., "USI", cols=c("CBFA2T3.GLIS2", "CBFB.MYH11", 
+                                                "KMT2A.ELL", "KMT2A.MLLT1",
+                                                "KMT2A.MLLT10","KMT2A.MLLT3",
+                                                "KMT2A.MLLT4", "NUP98.KDM5A", 
+                                                "NUP98.NSD1", "RUNX1.RUNX1T1"))) %>% 
+  mutate(Categories=case_when(
+    grepl("NBM", Categories) ~ "NBM", 
+    grepl("OtherAML", Categories) & grepl("MLL", Cytogenetic.Category.1) ~ "KM2TA-X",
+    grepl("OtherAML", Categories) & grepl("Normal", Cytogenetic.Category.1) ~ "Normal_Cyto", 
+    grepl("OtherAML", Categories) & grepl("Other", Cytogenetic.Category.1) ~ "Other_Cyto", 
+    TRUE ~ Categories))
+  
+
+head(Groups)
+# tail(Groups)
+dim(Groups)
+```
+
+```{r}
+table(Groups$Categories)
+```
+
+
+
+
+#Read in the annotation
+
+```{r}
+anno <- read.csv(file.path(PROJHOME,"0000.00.02_Reference_GeneInfo/gencode.v29_RepBase.v24.01_GeneLevel_IDmap_anno_12.23.19.csv"))
+
+head(anno)
+dim(anno)
+```
+
+```{r}
+protein.coding <- anno %>% 
+  filter(grepl("IG_.+_gene$|TR_.+_gene$|protein_coding", gene_type))
+
+dim(protein.coding)
+```
+
+
+#Readthe highly expressed AML genes information 
+
+```{r}
+#These are plasma membrane/ ECM only
+AML.genes <- read.csv("/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2018.02.12_AML_Specific_Transcripts/AML_Highly_Expressed_Genes.csv")
+
+dim(AML.genes) #10170    16
+head(AML.genes)
+```
+
+```{r}
+quantile(AML.genes$Percent.Expressors_GT.10TPM)
+sum(AML.genes$Percent.Expressors_GT.10TPM > 50) #4610
+```
+
+```{r}
+#NOTE: already filtered to have genes with a mx 5TPMs in NBMs. so These are AML restricted
+AML.genes_byGroup <- read.csv("/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2018.02.12_AML_Specific_Transcripts/AML_Highly_Expressed_Genes_per_Group_LowNBM.csv")
+
+dim(AML.genes_byGroup)
+```
+
+
+#Read in DEGs 
+
+```{r}
+path <- "/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2019.04.05_Kallisto_DE_Transcriptome_MS/DEGs"
+
+degs.files <- dir(path = path, pattern = "*vsNBM_DEGs.csv|AMLvsNBM_allGenes_DEGs",full.names = TRUE)
+# degs.files
+length(degs.files)
+```
+
+```{r}
+degs.AML.files <- dir(path = path, pattern = "*vsOthers_DEGs.csv",full.names = TRUE)
+# degs.AML.files
+length(degs.AML.files)
+```
+
+
+DEGs.list <- lapply(degs.files, function(x) 
+  read.csv(x) %>% 
+    filter(logFC > 1.0, adj.P.Val < 0.001)) %>% 
+  set_names(gsub("^.+\\/(.+_DEGs).csv", "\\1", degs.files))
+
+lapply(DEGs.list, dim)
+summary(DEGs.list)
+lapply(DEGs.list, head)
+
+
+#Combine all up-regulated genes into an excel file 
+
+http://www.sthda.com/english/wiki/r-xlsx-package-a-quick-start-guide-to-manipulate-excel-files-in-r#install-and-load-xlsx-package
+
+
+```{r eval=FALSE}
+#append each annotated DEGs list to the file 
+i <- 1
+for (file in degs.files){
+  
+  df <- read.csv(file) %>%
+    as.data.frame() 
+  
+  name <- gsub("^.+\\/([A-Z].+)\\_DEGs.csv", "\\1", degs.files)[i]
+  
+  print(i)
+  print(name)
+  if(i == 1){
+  write.xlsx(df, file = "TARGET_AML_vsNBM_Ribodepleted_DEGs_per_Group.xlsx",
+             sheetName=name,
+             col.names=TRUE,
+             row.names=FALSE,
+             append=FALSE)
+  }else{
+  write.xlsx(df, file = "TARGET_AML_vsNBM_Ribodepleted_DEGs_per_Group.xlsx",
+             sheetName=name,
+             col.names=TRUE,
+             row.names=FALSE,
+             append=TRUE)
+  }
+  
+  i <- i + 1
+  rm(df)
+  gc()
+}
+```
+
+```{r}
+i <- 1
+for (file in degs.AML.files){
+  
+  df <- read.csv(file) %>%
+    as.data.frame()
+  name <- gsub("^.+\\/([A-Z].+)\\_DEGs.csv", "\\1", degs.AML.files)[i]
+  
+  print(i)
+  print(name)
+  if(i == 1){
+  write.xlsx(df, file = "TARGET_AML_vsOthers_Ribodepleted_DEGs_per_Group.xlsx",
+             sheetName=name,
+             col.names=TRUE,
+             row.names=FALSE,
+             append=FALSE)
+  }else{
+  write.xlsx(df, file = "TARGET_AML_vsOthers_Ribodepleted_DEGs_per_Group.xlsx",
+             sheetName=name,
+             col.names=TRUE,
+             row.names=FALSE,
+             append=TRUE)
+  }
+  
+  i <- i + 1
+  rm(df)
+  gc()
+}
+```
+
+# Concatenate all DEGs into a Single Dataframe
+
+```{r message=FALSE}
+DEGs.cated <- catRbind(filenames = degs.files, 
+                       regex = "^.+\\/(.+_DEGs).csv", header = TRUE,
+                       ID.Col.Name = "Comparison",sep = ",") 
+
+head(DEGs.cated)
+dim(DEGs.cated) #68725    16
+```
+
+```{r}
+DEGs.AML.cated <- catRbind(filenames = degs.AML.files, 
+                       regex = "^.+\\/(.+_DEGs).csv", header = TRUE,
+                       ID.Col.Name = "Comparison",sep = ",") 
+head(DEGs.AML.cated)
+```
+
+
+#Create Dataframe of Highly expressed and differentially expressed targets 
+
+```{r}
+Targets <- DEGs.cated %>% 
+  #Filter for significantly upregulated 
+  filter(logFC > 1.0, adj.P.Val < 0.001) %>% 
+  filter(grepl("^ENSG", gene)) %>%
+  left_join(., select(protein.coding, gene_id, gene_type, Possible.ADC.Developed), 
+            by=c("gene"="gene_id")) %>% 
+  
+  select(gene,gene_name,gene_type, FoldChange,
+         Possible.ADC.Developed,
+         Predicted_Transmembrane_Structure,
+         Cellular.Compartment_Membrane, 
+         Cellular.Compartment_Receptors, Comparison) %>%
+  mutate(Comparison=gsub("vsNBM.+","", Comparison)) %>%
+  
+  group_by(gene) %>% 
+  mutate(Associated_Subtypes=collapseRows(Comparison, uniq = TRUE),
+         Ensembl_ID=collapseRows(gene,uniq=TRUE),
+         Gene_Symbol=collapseRows(gene_name, uniq = TRUE), 
+         Min_Fold_Change=min(FoldChange), 
+         Number_Subtypes=n()) %>%
+  ungroup() %>% 
+  
+  select(Gene_Symbol,Ensembl_ID,Min_Fold_Change,
+         Associated_Subtypes,Number_Subtypes,
+         gene_type,
+         Predicted_Transmembrane_Structure,
+         contains("Compartment"), 
+         Possible.ADC.Developed) %>% 
+  unique() %>% 
+  
+  bind_rows(., select(AML.genes,
+                      Gene_Symbol=gene_name,
+                      Ensembl_ID=gene_id,
+                      gene_type, 
+                      Predicted_Transmembrane_Structure=Transmembrane_Helix,
+                      contains("compartment"), 
+                      Possible.ADC.Developed)) %>%
+  
+  filter(!duplicated(Ensembl_ID)) %>% #remove the last duplicates
+  filter(Ensembl_ID %in% protein.coding$gene_id) %>% #Only include protein coding genes
+  arrange(desc(Number_Subtypes), desc(Min_Fold_Change))
+    
+
+
+# head(Targets)
+# tail(Targets)
+dim(Targets) #10752    10
+table(Targets$Possible.ADC.Developed)
+```
+
+```{r}
+Discriminating.Genes <- DEGs.AML.cated %>% 
+  #Filter for significantly upregulated 
+  filter(logFC > 1.0, adj.P.Val < 0.001) %>% 
+  filter(grepl("^ENSG", gene)) %>%
+  left_join(., select(protein.coding, gene_id, gene_type, Possible.ADC.Developed), 
+            by=c("gene"="gene_id")) %>% 
+  filter(gene_type %in% protein.coding$gene_type) %>% #Only include protein coding genes
+  
+  select(gene,gene_name,gene_type, 
+         FoldChange,adj.P.Val,
+         Possible.ADC.Developed,
+         Predicted_Transmembrane_Structure,
+         Cellular.Compartment_Membrane, 
+         Cellular.Compartment_Receptors, Comparison) %>%
+  mutate(Comparison=gsub("vsOthers.+","", Comparison)) %>%
+  filter(grepl("NUP98|GLIS2|MLLT10$|MLLT1$|MLLT4$", Comparison)) %>% 
+  
+  group_by(Comparison) %>% 
+  arrange(desc(FoldChange)) %>% 
+  slice(1:50) %>% 
+  ungroup() %>%
+  
+  # group_by(gene) %>%
+  # mutate(Associated_Subtypes=collapseRows(Comparison, uniq = TRUE),
+  #        Ensembl_ID=collapseRows(gene,uniq=TRUE),
+  #        Gene_Symbol=collapseRows(gene_name, uniq = TRUE),
+  #        Min_Fold_Change=min(FoldChange),
+  #        Number_Subtypes=n()) %>%
+  # ungroup() %>%
+  # 
+  select(Gene_Symbol=gene_name,Ensembl_ID=gene,
+         Comparison,
+         FoldChange,adj.P.Val,
+         # Min_Fold_Change,
+         # Associated_Subtypes,Number_Subtypes,
+         gene_type,
+         Predicted_Transmembrane_Structure,
+         contains("Compartment"),
+         Possible.ADC.Developed) 
+  # unique() %>%
+  # filter(gene_type %in% protein.coding$gene_type) %>% #Only include protein coding genes
+  # arrange(desc(Number_Subtypes), desc(Min_Fold_Change))
+    
+
+
+head(Discriminating.Genes)
+# tail(Discriminating.Genes)
+dim(Discriminating.Genes) 
+
+# write.csv(Discriminating.Genes,"~/test.csv")
+```
+
+```{r}
+table(Discriminating.Genes$Comparison)
+table(Discriminating.Genes$Possible.ADC.Developed)
+```
+
+
+
+#Add in the Summary Stats 
+
+```{r}
+#need 2 functions to accomplish this with summarize_at() because it cannot do as complex manipulations without a wrapper function. 
+options(digits = 2 )
+Nover <- function(x,y,...){sum(x >= y, na.rm = TRUE)}
+Pover <- function(x,y,...){ (sum(x >= y, na.rm = TRUE)/ sum(!is.na(x)))*100 }
+```
+
+```{r}
+TPMs.summary <- TPMs %>% 
+  rownames_to_column("Ensembl_ID") %>% 
+  mutate(Ensembl_ID=gsub("\\.[0-9]{1,}", "", Ensembl_ID)) %>%
+  filter(Ensembl_ID %in% Targets$Ensembl_ID) %>% 
+  
+  gather(USI, TPM, -Ensembl_ID) %>% 
+  mutate(Group=ifelse(grepl("^RO|^BM", USI), "NBM", "AML")) %>% 
+  spread(Group,TPM) %>%
+  
+  group_by(Ensembl_ID) %>%
+  summarise_at(vars(AML:NBM),
+               .funs = list(Number.Expressors_GT.10TPM=~Nover(.,y=10.0), 
+                            Percent.Expressors_GT.10TPM=~Pover(.,y=10.0),
+                            Number.Expressors_GT.50TPM=~Nover(., y=50.0),
+                            Percent.Expressors_GT.50TPM=~Pover(., y=50.0),
+                            median_TPM=median,
+                            mean_TPM=mean,
+                            max_TPM=max,
+                            std_dev=sd), na.rm=TRUE) %>% #N=n(),
+  ungroup() %>%
+  filter(AML_Percent.Expressors_GT.10TPM >= 10)  #keep only targets found in 20% of the population
+
+
+
+dim(TPMs.summary) #8434   17
+head(TPMs.summary)
+```
+
+```{r}
+sum(TPMs.summary$NBM_max_TPM < 5.0)
+quantile(TPMs.summary$AML_Percent.Expressors_GT.10TPM)
+# hist(log2(TPMs.summary$NBM_max+1))
+# abline(v=log2(5+1), col="red")
+```
+
+```{r}
+TPMs.summary.byGroup <- TPMs %>% 
+  rownames_to_column("Ensembl_ID") %>% 
+  mutate(Ensembl_ID=gsub("\\.[0-9]{1,}", "", Ensembl_ID)) %>%
+  filter(Ensembl_ID %in% AML.genes_byGroup$gene_id) %>% 
+  
+  gather(USI, TPM, -Ensembl_ID) %>% 
+  mutate(Group=ifelse(grepl("^RO|^BM", USI), "NBM", "AML")) %>% 
+  spread(Group,TPM) %>%
+  
+  group_by(Ensembl_ID) %>%
+  summarise_at(vars(AML:NBM),
+               .funs = list(Number.Expressors_GT.10TPM=~Nover(.,y=10.0), 
+                            Percent.Expressors_GT.10TPM=~Pover(.,y=10.0),
+                            Number.Expressors_GT.50TPM=~Nover(., y=50.0),
+                            Percent.Expressors_GT.50TPM=~Pover(., y=50.0),
+                            median_TPM=median,
+                            mean_TPM=mean,
+                            max_TPM=max,
+                            std_dev=sd), na.rm=TRUE) %>% #N=n(),
+  ungroup() 
+
+dim(TPMs.summary.byGroup)
+```
+
+```{r}
+TPMs.summary.Discr <- TPMs %>% 
+  rownames_to_column("Ensembl_ID") %>% 
+  mutate(Ensembl_ID=gsub("\\.[0-9]{1,}", "", Ensembl_ID)) %>%
+  filter(Ensembl_ID %in% Discriminating.Genes$Ensembl_ID) %>% 
+  
+  gather(USI, TPM, -Ensembl_ID) %>%
+  mutate(Group=ifelse(grepl("^RO|^BM", USI), "NBM", "AML")) %>%
+  left_join(., select(Groups,USI, Subtype=Categories), by="USI") %>%
+  filter(grepl("NUP98|GLIS2|MLLT10$|MLLT1$|MLLT4$|NBM$", Subtype)) %>%
+  mutate(Subtype=gsub("\\.", "", Subtype)) %>% 
+  
+  group_by(Ensembl_ID,Subtype, add = TRUE) %>%
+  mutate(Number_Samples_in_Subtype=n(),
+            Number_Subtype_Expressors_GT.10TPM=sum(TPM >= 10.0),
+            Percent_Subtype_Expressors_GT.10TPM=(sum(TPM >= 10.0)/n())*100,
+
+            # Number.Expressors_GT.50TPM=sum(TPM >= 50.0),
+            # Percent.Expressors_GT.50TPM=(sum(TPM >= 50.0)/n())*100,
+
+            Mean_TPM_in_Subtype=mean(TPM),
+            Median_TPM_in_Subtype=median(TPM),
+            Max_TPM_in_Subtype=max(TPM)) %>%
+  ungroup() %>%
+
+  spread(Group,TPM) %>%
+  group_by(Ensembl_ID) %>%
+  mutate_at(vars(AML:NBM),
+               .funs = list(Number.Expressors_GT.10TPM=~Nover(.,y=10.0),
+                            Percent.Expressors_GT.10TPM=~Pover(.,y=10.0),
+                            # Number.Expressors_GT.50TPM=~Nover(., y=50.0),
+                            # Percent.Expressors_GT.50TPM=~Pover(., y=50.0),
+                            median_TPM=median,
+                            mean_TPM=mean,
+                            max_TPM=max,
+                            std_dev=sd), na.rm=TRUE) %>% #N=n(),
+  ungroup() %>%
+  filter(Subtype != "NBM") %>% #Don't need NBM later one becuase the same info is in the columns created after spread()
+  select(-AML,-NBM,-USI) %>% #remove the TPM values and USIs because we need a summary - not individual data points anymore.
+
+  unique()
+
+head(TPMs.summary.Discr)
+dim(TPMs.summary.Discr) #1488   20
+length(unique(TPMs.summary.Discr$Ensembl_ID)) #248
+table(TPMs.summary.Discr$Subtype) # 7 groups 
+```
+
+
+#Merge Summary Stats with the DEGs and Other Targets
+
+```{r}
+Targets.w.stats <- Targets %>% 
+  rename_at()
+  right_join(., TPMs.summary, by="Ensembl_ID") %>% 
+  mutate(Ratio=AML_mean_TPM/NBM_mean_TPM) %>%
+  mutate(Fold_Change_vs_NBM=case_when(
+                    Ratio < 1.0 ~ -1/Ratio,
+                    Ratio > 1.0 ~ Ratio)) %>% 
+  
+  mutate(Associated_Subtypes=ifelse(is.na(Associated_Subtypes),
+                                    "Highly Expressed in all AML", Associated_Subtypes)) %>%
+  mutate_if(is.numeric, .funs = ~round(., digits = 2)) %>%
+  select(Gene_Symbol, Ensembl_ID,
+         Min_Fold_Change_vs_NBM_in_Subtype=Min_Fold_Change,
+         Fold_Change_vs_NBM,
+         Associated_Subtypes,
+         contains("Compartments"), 
+         everything(),-Ratio, -Number_Subtypes) %>% 
+  mutate(Rownames = case_when(
+    duplicated(Gene_Symbol) | duplicated(Gene_Symbol, fromLast = TRUE) ~ paste(Gene_Symbol,Ensembl_ID, sep="_"), 
+    TRUE ~ Gene_Symbol)) %>% 
+  arrange(desc(Min_Fold_Change_vs_NBM)) #,desc(AML_Percent.Expressors_GT.10TPM), 
+  
+head(Targets.w.stats)
+# dim(Targets.w.stats) #8434   26
+```
+
+```{r}
+# write.csv(Targets.w.stats, "TARGET_AML_DEGs_and_HighlyExpressed_in_AML.csv", row.names = FALSE)
+```
+
+```{r}
+Targets.by.Groups <- AML.genes_byGroup %>% 
+  select(Gene_Symbol=gene_name,Ensembl_ID=gene_id, Associated_Subtypes=Categories,
+         gene_type, Predicted_Transmembrane_Structure=Transmembrane_Helix, matches("compartment|ADC"), 
+         Percent_Subtype_Expressors_GT.10TPM=Percent.Expressors_GT.10TPM,
+         Mean_TPM_in_Subtype=Mean.TPM, Median_TPM_in_Subtype=Median.TPM,
+         Max_TPM_in_Subtype=Max.TPM, Number_Samples_in_Subtype=Number.AML_Samples) %>%
+  left_join(., TPMs.summary.byGroup, by="Ensembl_ID" )
+
+head(Targets.by.Groups)  
+# write.csv(Targets.by.Groups, "TARGET_AML_Restricted_Genes_by_Group.csv", row.names = FALSE)
+```
+
+
+```{r}
+Discr.Genes.Stats <- Discriminating.Genes %>% 
+  select(everything(),Subtype=Comparison) %>%
+  right_join(., TPMs.summary.Discr, by=c("Ensembl_ID", "Subtype")) %>% 
+  filter(!is.na(FoldChange)) %>%
+
+  mutate(Ratio=AML_mean_TPM/NBM_mean_TPM) %>%
+  mutate(Fold_Change_vs_NBM=case_when(
+                    Ratio < 1.0 ~ -1/Ratio,
+                    Ratio > 1.0 ~ Ratio)) %>% 
+  
+  # mutate(Associated_Subtypes=ifelse(is.na(Associated_Subtypes),
+  #                                   "Highly Expressed in all AML", Associated_Subtypes)) %>%
+  mutate_if(is.numeric, .funs = ~round(., digits = 2)) %>%
+  select(Gene_Symbol, Ensembl_ID,
+         FoldChange, adj.P.Val,
+         # Min_Fold_Change_vs_OtherAML_in_Subtype=Min_Fold_Change,
+         Fold_Change_vs_NBM,
+         # Associated_Subtypes,
+         contains("Compartments"), 
+         everything(),-Ratio) %>%  #-Number_Subtypes
+  mutate(Rownames = case_when(
+    duplicated(Gene_Symbol) | duplicated(Gene_Symbol, fromLast = TRUE) ~ paste(Gene_Symbol,Ensembl_ID, sep="_"), 
+    TRUE ~ Gene_Symbol)) %>% 
+  arrange(desc(Fold_Change_vs_NBM), desc(AML_Percent.Expressors_GT.10TPM)) #,desc(AML_Percent.Expressors_GT.10TPM), 
+
+head(Discr.Genes.Stats)
+# dim(Discr.Genes.Stats) #300  30
+# length(unique(Discr.Genes.Stats$Ensembl_ID)) #248
+# sum(Discr.Genes.Stats$AML_Percent.Expressors_GT.10TPM > 30 & Discr.Genes.Stats$NBM_max_TPM < 5)
+# write.csv(Discr.Genes.Stats, "TARGET_AML_HighRisk_Ribodepleted_50DEGs_vsOtherAML_Compared_to_NBM.csv", row.names = FALSE)
+```
+
+
+#Separate into intracellular and Plasma membrane 
+
+```{r}
+TM <- Targets.w.stats %>% 
+  filter(Cellular.Compartment_Membrane != "" | Cellular.Compartment_Receptors != "")
+
+
+dim(TM)
+```
+
+```{r}
+intra <- Targets.w.stats %>% 
+  filter(Cellular.Compartment_Membrane == "" | is.na(Cellular.Compartment_Membrane))
+
+dim(intra)
+```
+ 
+```{r}
+quantile(TM$Min_Fold_Change_vs_NBM)
+sum(TM$Min_Fold_Change_vs_NBM > 0) #617 with postive fold-change
+```
+
+```{r}
+# write.csv(TM, "TARGET_AML_CellMembrane_DEGs_and_HighlyExpressedGenes_in_AML.csv", row.names = FALSE)
+# write.csv(intra, "TARGET_AML_intracellular_DEGs_and_HighlyExpressedGenes_in_AML.csv", row.names = FALSE)
+```
+
+
+
+#Filter and Sort 
+
+```{r}
+high.AML <- Targets.w.stats %>% 
+  filter(NBM_max_TPM <= 5.0)
+
+
+dim(high.AML)
+# write.csv(high.AML,"TARGET_AML_Restricted_Genes_6.12.19.csv", row.names = FALSE)
+```
+
+
+
+High in AML and low in NBM with cell surface 
+
+CPXM1 (in LSC17)
+CD34 (in LSC17)
+CHRFAM7A (dominant negative)
+ANKMY2 (SHH signaling modulator)
+DNM1 (in regression for IMP/EMK in MDS)
+DNAJB4 (heatshock protein)
+NECTIN2 (ADC in ovarian/breast cancer https://www.ncbi.nlm.nih.gov/pmc/articles/PMC3698035/)
+PROM1 (CD133 negative prognostic marker in AML and ALL)
+
+
+```{r}
+TM.GOI <- TM %>% 
+  filter(NBM_Percent.Expressors_GT.10TPM < 10.0, Min_Fold_Change_vs_NBM > 1.5) %>% 
+
+dim(TM.GOI)
+```
+
+```{r}
+# hist(TM.GOI$AML_median, breaks = seq(0,23))
+```
+
+```{r}
+protien.coding <- biotype[biotype$Gene.type == "protein_coding","Gene.stable.ID"]
+
+intra.GOI <- intra %>% 
+  filter(NBM_Percent.Expressors_GT.10TPM < 10.0, Min_Fold_Change_vs_NBM > 1.5) %>% 
+  filter(Ensembl_ID %in% protien.coding)
+
+dim(intra.GOI)
+```
+
+```{r}
+# hist(intra.GOI$AML_median, breaks = seq(0,20))
+```
+
+
+#Waterfall plots 
+
+
+```{r}
+pheno1 <- Groups$Cytogenetic.Category.1 %>%
+  set_names(Groups$USI)
+
+pheno2 <- Groups$Cytogenetic.Category.2 %>% 
+  gsub("Unknown","OtherAML",.) %>%
+  set_names(Groups$USI)
+
+pheno3 <- Groups$Rare.Fusions %>% 
+  gsub("Unknown","OtherAML",.) %>%
+  set_names(Groups$USI)
+
+table(pheno1, useNA = "always")
+table(pheno2, useNA = "always")
+table(pheno3, useNA = "always")
+```
+
+```{r}
+TPMs.subset <- TPMs[c(Targets.w.stats$Ensembl_ID), ]
+rownames(TPMs.subset) <- Targets.w.stats$Rownames
+head(TPMs.subset[,1:5])
+dim(TPMs.subset)
+```
+
+```{r fig.width=16, fig.height=4}
+TM.GOI.plots <- lapply(TM.GOI$Gene_Symbol, function(x) arrangeGrob(grobs=lapply(list(pheno1,pheno2,pheno3), 
+                                                                                function(p) waterfallPlot(expnMatrix = TPMs.subset,  
+                                                                                                          geneName = x, 
+                                                                                                          phenoVector = p, 
+                                                                                                          unit = "TPM")), 
+                                                                   ncol = 3, nrow = 1))
+
+
+plot(TM.GOI.plots[[5]])
+```
+
+```{r }
+TM.ml <- marrangeGrob(grobs = TM.GOI.plots, ncol=1, nrow=3)
+# ggsave("Transmembrane_Gene_Targets_in_pAML.pdf",TM.ml,width = 16.5, height = 10)
+```
+
+
+```{r fig.width=16, fig.height=4}
+intra.GOI.plots <- lapply(intra.GOI$Gene_Symbol, function(x) arrangeGrob(grobs=lapply(list(pheno1,pheno2,pheno3), 
+                                                                                function(p) waterfallPlot(expnMatrix = TPMs.subset,  
+                                                                                                          geneName = x, 
+                                                                                                          phenoVector = p, 
+                                                                                                          unit = "TPM")), 
+                                                                   ncol = 3, nrow = 1))
+
+
+plot(intra.GOI.plots[[5]])
+length(intra.GOI.plots)
+```
+
+```{r}
+intra.ml <- marrangeGrob(grobs = intra.GOI.plots, ncol=1, nrow=3)
+ggsave("Intracellular_Gene_Targets_in_pAML.pdf",intra.ml,width = 16.5, height = 10)
+```
+
+
+```{r fig.width=16}
+GOI.highAML <- lapply(high.AML$Gene_Symbol, function(x) arrangeGrob(grobs=lapply(list(pheno1,pheno2,pheno3), function(p) waterfallPlot(expnMatrix = TPMs.subset,  
+                                                                              geneName = x, 
+                                                                              phenoVector = p, 
+                                                                              unit = "TPM")), 
+                                                                   ncol = 3, nrow = 1))
+plot(GOI.highAML[[1]])
+```
+
+```{r}
+high.ml <- marrangeGrob(grobs = GOI.highAML, ncol=1, nrow=3)
+# ggsave("Gene_Targets_Restricted_in_pAML.pdf",high.ml,width = 16.5, height = 10)
+```
+
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+

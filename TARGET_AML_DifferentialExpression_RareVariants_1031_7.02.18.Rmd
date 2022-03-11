@@ -1,0 +1,235 @@
+---
+title: "Differential Expression of Rare  Variants"
+author: "Jenny Smith"
+date: "June 20, 2018"
+output: html_document
+---
+
+
+Updated this to use the newest CDEs with all eligable patients currently. 
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2017.06.20_DEGs_RareVariants/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline_3.21.18.r")
+source("~/scripts/survival_analysis/Survplot_Functions_2017.03.31.r")
+```
+
+
+
+
+#Read in the counts
+
+```{r}
+counts <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_FractionalCounts.csv", stringsAsFactors = FALSE, row.names = 1)
+
+colnames(counts) <- str_split_fixed(colnames(counts), "\\.", n=3)[,1]
+head(counts[,1:5])
+```
+
+
+
+#Read in the clinical Data
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_6.28.18.csv",
+                     stringsAsFactors = FALSE)
+
+CDE.1031 <- CDE.1031 %>% 
+  filter(!is.na(CDE.1031$USI)) %>%
+  set_rownames(.$USI) %>%
+  mutate_at(vars(matches("^t\\.|^inv|^del|^mono|^tri|MLL|^Minus")), funs(ifelse(is.na(.) | grepl("^$", .), "Unknown", .))) %>%
+  select(USI,Patient.registration.number,ISCN,MLL, inv.16., t.8.21.)
+  
+
+# head(CDE.1031)
+dim(CDE.1031) #1149  samples
+```
+
+
+```{r}
+merged <- read.csv("~/reference_mapping-files/TARGET_AML_1031_0531_Merged_CDE_5.23.18.csv", 
+                   stringsAsFactors = FALSE)
+merged <- merged %>%
+  filter(!is.na(TARGET.USI.1)) %>%
+  set_rownames(.$TARGET.USI.1)
+
+head(merged[,1:5])
+```
+
+
+```{r}
+missing <- merged %>% 
+  filter(Protocol != "1031") %>% 
+  filter(TARGET.USI.1 %in% colnames(counts)) %>% 
+  select(USI=TARGET.USI.1, Patient.registration.number=Reg., ISCN,MLL, inv.16., t.8.21.)
+
+# write.csv(missing, "~/TARGET_AML_CDEs_RBD_RNASeq_Missing.csv", row.names = FALSE)
+```
+
+
+```{r}
+final <- CDE.1031 %>% 
+  bind_rows(missing) %>%
+  filter(!is.na(USI)) %>%
+  set_rownames(.$USI)
+  
+sum(final$USI %in% colnames(counts))
+# write.csv(final, "/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/Clinical/CDE/TARGET_AML_1031_0531_RBD_SUBSET_CDEs.csv", row.names = FALSE)
+```
+
+
+
+#Select Columns for Differntial Expression
+
+
+```{r}
+cols.m <- colnames(merged) %>% 
+  grep("^t\\.|^inv|^del|^mono|^tri|MLL|^Minus", ., value = TRUE, ignore.case = TRUE) %>%
+  grep("RNASeq", ., invert = TRUE, value = TRUE)
+
+length(cols.m)
+```
+
+
+```{r}
+cols <- colnames(final) %>% 
+  grep("^t\\.|^inv|^del|^mono|^tri|MLL|^Minus", ., value = TRUE, ignore.case = TRUE) %>%
+  grep("RNASeq", ., invert = TRUE, value = TRUE)
+
+length(cols)
+```
+
+```{r}
+#Check that they do not have different factor levels besides No, Yes, Unknown
+sapply(final[,cols], table, useNA="always") 
+```
+
+
+
+
+#Perform Differential Expression Analysis 
+
+Limma voom with LogCPM and TMM normalized counts. Rare Variant AML vs All Other AML
+
+Using Fractional Counts as Input. 
+
+```{r message=FALSE,warning=FALSE,fig.height=10, fig.width=10}
+# pdf(file="TARGET_AML_1031_RareVariant_vs_otherAML_DEGs_Heatmaps_07.02.2018.pdf")
+
+DEGs.RareVariants <- lapply(cols, twoGroups_DEGs, 
+                            expnData=counts, 
+                            clinData=final,
+                            logCPM=FALSE,
+                            BM=FALSE, 
+                            ref="No")
+
+names(DEGs.RareVariants) <- cols
+
+# dev.off()
+```
+
+```{r}
+table(DEGs.RareVariants$MLL$phenovector)
+```
+
+
+```{r}
+summary(DEGs.RareVariants)
+# DEGs.RareVariants$Monosomy.5.del.5q.._Cleaned$GroupA # One patient. Will remove
+# DEGs.RareVariants <- DEGs.RareVariants[-6]
+
+# saveRDS(DEGs.RareVariants, "TARGET_AML_1031_RareVariants_vs_OtherAML_list.RDS")
+```
+
+
+```{r fig.width=8, fig.height=8}
+# dir.create(paste(getwd(), "PCA_Plots", sep = "/"))
+# path <- paste(getwd(), "PCA_Plots", sep = "/")
+PCA.otherAML <- lapply(DEGs.RareVariants, extract_PCA)
+MDS.otherAML <- lapply(DEGs.RareVariants, extract_MDS)
+
+MDS.otherAML 
+
+
+PCA.otherAML
+```
+
+
+```{r}
+RareVsOtherAML_DEGs <- lapply(DEGs.RareVariants, extract_DEGs)
+#Save DEGs to file
+
+# invisible(lapply(1:length(RareVsOtherAML_DEGs), 
+#                  function(i) write.csv(RareVsOtherAML_DEGs[[i]], 
+#                                        file=paste0("RareCytoVariant/1031_EligablesOnly/TARGET_AML_1031_", names(RareVsOtherAML_DEGs[i]),"_vs_OtherAML_DEGs_7.03.2018.csv", sep=""))))
+```
+
+
+#Differential Expression of AML Rare Variants versus Normal BM
+
+```{r fig.height=10, fig.width=10, message=FALSE}
+# pdf(file="TARGET_AML_1031_RareVariantsvsNormalBM_DEGs_Heatmaps_7.02.2018.pdf")
+
+DEGs.RareVar_BM <- lapply(cols, twoGroups_DEGs, 
+                          expnData=counts, 
+                          clinData=final, 
+                          logCPM=FALSE,
+                          ref="No",
+                          BM=TRUE)
+
+names(DEGs.RareVar_BM) <- cols
+
+# dev.off()
+```
+
+```{r}
+summary(DEGs.RareVar_BM)
+# DEGs.RareVar_BM$Monosomy.5.del.5q.._Cleaned$GroupA # One patient. Will remove
+# DEGs.RareVar_BM <- DEGs.RareVar_BM[-6]
+```
+
+```{r fig.height=8, fig.width=8}
+
+MDS.NBM <- lapply(DEGs.RareVar_BM, extract_MDS)
+
+PCA.NBM <- lapply(DEGs.RareVar_BM, extract_PCA)
+
+MDS.NBM
+
+PCA.NBM
+```
+
+
+```{r}
+RareVsBM_DEGs_only <- lapply(DEGs.RareVar_BM, extract_DEGs)
+
+lapply(1:length(RareVsBM_DEGs_only), function(i) write.csv(RareVsBM_DEGs_only[[i]],
+                                                           file=paste0("RareCytoVariant/1031_EligablesOnly/TARGET_AML_1031_", names(RareVsBM_DEGs_only[i]),"vs_NormalBM_DEGs_7.03.2018.csv")))
+```
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+
+
+
+

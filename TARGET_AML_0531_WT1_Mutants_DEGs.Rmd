@@ -1,0 +1,106 @@
+---
+title: 'WT1 Mutation Differentially Expressed Genes'
+author: "Jenny Smith"
+date: "Feb 19, 2018"
+output: html_document
+---
+
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', fig.height=5, fig.width=8, dpi = 600)
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2017.06.20_DEGs_RareVariants')
+options(stringsAsFactors = FALSE)
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+getwd()
+```
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline_01.07.19.r")
+```
+
+
+#Define Functions to be used
+
+
+
+#Read in the Clinical data
+
+
+```{r}
+merged <- read.csv("~/reference_mapping-files/TARGET_AML_0531_1031_merged_CDEs_1.10.19.csv")
+
+merged <- merged %>%
+  filter(!is.na(USI)) %>%
+  # mutate_at(vars(NUP98.NSD1), funs(gsub("Intermediate", "Yes", .))) %>%
+  column_to_rownames("USI")
+
+
+head(merged[,1:5])
+
+```
+
+
+```{r}
+merged %>%
+  filter(Protocol == "AAML1031") %>%
+  group_by(monosomy.7) %>%
+  summarise(N=n())
+
+```
+
+
+#Read in the counts
+
+```{r}
+# cts.1031 <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_FractionalCounts.csv", stringsAsFactors = FALSE, row.names = 1)
+# colnames(cts.1031) <- str_split_fixed(colnames(cts.1031),  "\\.", 2)[,1]
+# head(cts.1031[,1:5])
+```
+
+```{r}
+cts.0531 <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML0531_dupGenesRemoved_FractionalCounts.csv", stringsAsFactors = FALSE,
+                     row.names = 1)
+head(cts.0531[,1:5])
+```
+
+
+
+#Examine the Clinical Data and Define Groups
+
+```{r}
+TARGET.CDE <- merged %>% 
+  filter()
+  mutate_at(vars(WT1.mutation), funs(ifelse(is.na(.), "Unknown", .)))
+
+```
+
+
+```{r}
+table(merged.update$WT1.mutation, useNA = "always")
+```
+
+```{r}
+table(merged$WT1.mutation,merged$FLT3.ITD.positive., useNA = "always")
+```
+
+
+
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+

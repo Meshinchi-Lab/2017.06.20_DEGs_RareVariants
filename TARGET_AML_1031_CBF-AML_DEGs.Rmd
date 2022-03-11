@@ -1,0 +1,152 @@
+---
+title: "DEGs CBF-AML"
+author: "Jenny Smith"
+date: "February 14, 2018"
+output: html_document
+---
+
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=70),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2017.06.20_DEGs_RareVariants/RareCytoVariant/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+library(tidyr)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline.r")
+```
+
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_1.31.2018.csv",
+                     stringsAsFactors = FALSE, row.names = 1)
+
+# dim(CDE.1031)
+head(CDE.1031[,1:5])
+```
+
+
+```{r}
+HD.1031.cts <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_FractionalCounts.csv",
+                        stringsAsFactors = FALSE,
+                        row.names = 1)
+
+colnames(HD.1031.cts) <- str_split_fixed(colnames(HD.1031.cts), "\\.", n=3)[,1]
+head(HD.1031.cts[,1:5])
+```
+
+
+#Run differential expression
+
+```{r}
+CDE.1031 <- CDE.1031 %>%
+  filter(!is.na(USI)) %>%
+  mutate_at(c("inv.16_Cleaned","t.8.21_Cleaned"),funs(gsub("Not evaluated", "Unknown", .))) %>%
+  column_to_rownames("USI")
+
+head(CDE.1031[,1:5])
+# dim(CDE.1031)
+```
+
+
+```{r}
+cols <- c("inv.16_Cleaned","t.8.21_Cleaned")
+```
+
+```{r fig.height=10, fig.width=10}
+# pdf("TARGET_AML_1031_CBF-AML_vs_OtherAML_heatmaps.tiff", height = 10, width = 10)
+DEGs.CBF <- lapply(cols, twoGroups_DEGs, 
+                   expnData=HD.1031.cts, clinData=CDE.1031, ref="Negative")
+names(DEGs.CBF) <- cols
+
+# dev.off()
+```
+
+
+```{r}
+DEGs.list <- lapply(DEGs.CBF, extract_DEGs)
+# lapply(names(DEGs.list), function(x) write.csv(DEGs.list[[x]], paste0("TARGET_AML_1031_",x,"_vs_otherAML.csv"),  row.names=FALSE))
+```
+
+```{r}
+lapply(DEGs.list, head)
+```
+
+```{r}
+lapply(DEGs.CBF, extract_MDS)
+lapply(DEGs.CBF, extract_PCA)
+```
+
+
+```{r fig.height=12, fig.width=12}
+pdf("TARGET_AML_1031_CBF-AML_vs_NBM_heatmaps.pdf", height = 10, width = 10)
+
+DEGs.CBF.NBM <- lapply(cols, twoGroups_DEGs, 
+                   expnData=HD.1031.cts, clinData=CDE.1031, ref="Negative", BM=TRUE)
+names(DEGs.CBF.NBM) <- cols
+
+dev.off()
+```
+
+```{r}
+DEGs.NBM <- lapply(DEGs.CBF, extract_DEGs)
+# lapply(names(DEGs.NBM), function(x) write.csv(DEGs.NBM[[x]], paste0("TARGET_AML_1031_",x,"_vs_NBM.csv"),  row.names=FALSE))
+```
+
+```{r}
+lapply(DEGs.list, head)
+```
+
+
+#Remove the RUNX1.CBFA2T3 for RUNX1-RUNX1T1 DE 
+
+```{r}
+CDE.sub <- CDE.1031 %>%
+  rownames_to_column("USI") %>%
+  filter(RUNX1.CBFA2T3 != "Yes") %>%
+  column_to_rownames("USI")
+
+head(CDE.sub)
+# dim(CDE.sub)
+```
+
+```{r fig.height=10, fig.width=10}
+DEGs.RUNX1.RUNX1T1.no.t.16.21 <- twoGroups_DEGs(expnData = HD.1031.cts, clinData = CDE.sub, col = "t.8.21_Cleaned", ref = "Negative")
+```
+
+```{r}
+table(DEGs.RUNX1.RUNX1T1.no.t.16.21$phenovector)
+```
+
+```{r}
+DEGs.RUNXT1 <- extract_DEGs(DEGs.RUNX1.RUNX1T1.no.t.16.21)
+
+head(DEGs.RUNXT1)
+# dim(DEGs.RUNXT1) #2,520 genes
+# write.csv(DEGs.RUNXT1, "1031/TARGET_AML_1031_RUNX1.RUN1T1vsOtherAML_removedRUNX1.CBFA2T3_DEGs.csv", row.names = FALSE)
+```
+
+
+#Session Info
+
+```{r}
+sessionInfo()
+```
+
+
+
+
+

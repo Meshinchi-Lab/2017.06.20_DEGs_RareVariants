@@ -1,0 +1,395 @@
+---
+title: "Splice Junctions"
+author: "Jenny Smith"
+date: "September 6, 2019"
+output: html_document
+---
+
+#Set-up
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center', message = FALSE, fig.width = 10, fig.height = 10)
+knitr::opts_knit$set(root.dir = file.path(PROJHOME,"2017.06.20_DEGs_RareVariants"))
+options(stringsAsFactors = FALSE)
+```
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(readr)
+library(DeGSEA)
+library(ggplot2)
+getwd()
+```
+
+```{r}
+library(Rsamtools)
+library(GenomicAlignments)
+library(GenomicFeatures)
+```
+
+Reference: http://bioconductor.org/packages/release/bioc/vignettes/GenomicAlignments/inst/doc/OverlapEncodings.pdf
+
+
+#Transcript Reference 
+
+```{r}
+CBL <- makeTxDbFromGFF(file="Homo_sapiens._CBL_GRCh37.69.gtf",organism = "Homo sapiens")
+CBL
+```
+
+```{r}
+exons <- exonsBy(CBL, by="tx", use.names=TRUE)
+head(exons)
+length(exons) #1 transcript for CBL in the ensemble version
+```
+
+```{r}
+#We check that all the exons in any given transcript belong to the same chromosome and strand. Therefore the strand of any given transcript is unambiguously defined and can be extracted.
+table(elementNROWS(runLength(seqnames(exons)))) 
+```
+
+```{r}
+exon_strand <- unlist(runValue(strand(exons)), use.names=FALSE)
+exon_strand
+```
+
+```{r}
+tx <- transcripts(CBL, columns=c("tx_name", "gene_id"))
+head(tx)
+```
+
+#Bam File for Querying
+
+```{r}
+## Using the 'param' arg to drop PCR or optical duplicates as well as
+## secondary alignments, and to load additional BAM fields:
+param <- ScanBamParam(flag=scanBamFlag(isDuplicate=FALSE,
+                                       isSecondaryAlignment=FALSE, 
+                                       isNotPassingQualityControls=FALSE),
+                      what=c("qual", "flag"))
+
+```
+
+```{r}
+#bam created by: samtools view -h -b  $bam "11:119076752-119170491"
+#selecting region for CBL gene locus
+bam <- readGAlignmentPairs(file="/fh/scratch/delete90/meshinchi_s/jlsmith3/CBL/BAMs/TARGET-20-PAVAVV-09A-01R_RBS_withJunctionsOnGenome_dupsFlagged_CBL.srt.bam", 
+                           strandMode = 2, use.names = TRUE, param = param)
+
+head(bam)
+# head(first(bam))
+# head(last(bam))
+```
+
+```{r}
+# The SAM Spec only says that a pair
+# is proper if the first and last alignments in the pair are “properly aligned according to the aligner”. So the exact criteria used for setting this flag is left to the aligner.
+table(isProperPair(bam)) 
+```
+
+```{r}
+bam.clean <- bam[isProperPair(bam)]
+```
+
+```{r}
+table(duplicated(names(bam.clean)))
+
+uqnames <- unique(names(bam.clean))
+qnames <- factor(names(bam.clean), levels=uqnames)
+dup2unq <- match(qnames,qnames)
+```
+
+```{r}
+head(unique(cigar(first(bam.clean)))) #Our reads can have up to 1 skipped region per end?
+head(unique(cigar(last(bam.clean))))
+```
+
+```{r}
+ table(njunc(first(bam.clean)), njunc(last(bam.clean)))
+```
+
+```{r}
+colSums(cigarOpTable(cigar(first(bam.clean))))
+colSums(cigarOpTable(cigar(last(bam.clean))))
+```
+
+#Overlap Encoding
+
+```{r}
+df <- mcols(tx)
+exbytx2gene <- as.character(df$gene_id)
+exbytx2gene <- factor(exbytx2gene, levels=unique(exbytx2gene))
+names(exbytx2gene) <- df$tx_name
+exbytx2gene <- exbytx2gene[names(exons)] #order it
+
+head(exbytx2gene)
+nlevels(exbytx2gene) # number of genes
+```
+
+```{r}
+#U3.OV00
+olaps <- findOverlaps(bam.clean, exons, ignore.strand=TRUE)
+
+length(olaps) #1556 hits
+```
+
+```{r}
+bam_ntx <- countQueryHits(olaps)
+mcols(bam.clean)$ntx <- bam_ntx
+
+head(bam.clean)
+table(bam_ntx) #1556 reads overlap with CBL transcript out of 7730 aligned reads. 
+```
+
+```{r}
+#Find reads that overlap with the CBL genes' exon coordinates
+ntx_again <- countOverlaps(bam.clean, exons, ignore.strand=TRUE)
+stopifnot(identical(unname(ntx_again), bam_ntx))
+table(ntx_again)
+```
+
+#Splice Compatible Encodings
+
+
+```{r}
+grl <- grglist(bam.clean)
+olap_enc <- encodeOverlaps(grl, exons, hits=olaps, 
+                           flip.query.if.wrong.strand=TRUE)
+olap_enc
+```
+
+```{r}
+unique_encodings <- levels(olap_enc)
+length(unique_encodings)
+head(unique_encodings)
+```
+
+```{r}
+ovenc_table <- table(encoding(olap_enc))
+tail(sort(ovenc_table))
+```
+
+```{r}
+sort(ovenc_table[isCompatibleWithSplicing(unique_encodings)])
+```
+
+*Examples from the Tutorial*
+• "1--1:i-
+paired-end read (no skipped region on the first end, no skipped region
+on the last end): oooo oooo
+- transcript: ... >>>>>>>>>>>>>>>> ...
+
+• "2--1:jm--m:a
+- paired-end read (1 skipped region on the first end, no skipped region
+on the last end): ooo---o oooo
+- transcript: ... >>>>>>>> >>>>>>>>>>> ...
+
+• "1--2:i--jm:a
+- paired-end read (no skipped region on the first end, 1 skipped region
+on the last end): oooo oo---oo
+- transcript: ... >>>>>>>>>>>>>> >>>>>>>>> ...
+
+• "1--1:i--m:
+- paired-end read (no skipped region on the first end, no skipped region
+on the last end): oooo oooo
+- transcript: ... >>>>>>>>> >>>>>>> ...
+
+• "2--2:jm--mm:af--jm:
+- paired-end read (1 skipped region on the first end, 1 skipped region
+on the last end): ooo---o oo---oo
+- transcript: ... >>>>>> >>>>>>> >>>>> ...
+
+
+```{r}
+comp <- isCompatibleWithSplicing(olap_enc)
+table(comp)
+
+StepExonRanks <- extractSteppedExonRanks(olap_enc)
+# head(StepExonRanks)
+# tail(StepExonRanks)
+
+SpanExonRanks <- extractSpannedExonRanks(olap_enc)
+# head(SpanExonRanks)
+```
+
+```{r}
+exon.skip <- isCompatibleWithSkippedExons(olap_enc)
+table(exon.skip) #None. This patient is CBFGLIS and thus is 99% unlikely to have CBL deletion
+
+# extractSkippedExonRanks(olap_enc) #Zero of course
+```
+
+```{r}
+splice.comp <- olaps[comp]
+head(splice.comp)
+```
+
+```{r}
+comp_again <- findCompatibleOverlaps(bam.clean, exons) #same size... 
+head(comp_again)
+
+stopifnot(identical(comp_again, splice.comp))
+``` 
+
+
+#Splice Compatible Reads Annotated in GRranges BAM file
+
+```{r}
+ncomptx <- countQueryHits(splice.comp)
+mcols(bam.clean)$ncomptx <- ncomptx
+head(bam.clean)
+table(ncomptx)
+```
+
+
+#Extract the Genomic/Transcript Sequences of the Reads
+
+```{r}
+library(BSgenome)
+# available.genomes() %>% 
+#   grep("sapiens", ., value=T)
+# BiocManager::install("BSgenome.Hsapiens.1000genomes.hs37d5")
+library(BSgenome.Hsapiens.1000genomes.hs37d5)
+BSgenome.Hsapiens.1000genomes.hs37d5
+```
+
+I will try the "BSgenome.Hsapiens.1000genomes.hs37d5" since BAM headers from BCCA provide the following information:
+AS:NCBI-Build-37        
+UR:http://www.bcgsc.ca/downloads/genomes/9606/hg19/1000genomes/bwa_ind/genome/GRCh37-lite.fa
+SP:Homo sapiens
+
+otherwise, I may need to use, "http://bioconductor.org/packages/release/bioc/html/BSgenome.html" and forge my own genome. 
+
+
+*BSgenome.Hsapiens.1000genomes.hs37d5*
+Description
+  Full 1000genomes Phase2 Reference Genome Sequence (hs37d5), based on NCBI GRCh37.
+  Note This BSgenome data package was made from the following source data file:
+  ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/phase2_reference_assembly_
+  sequence/hs37d5.fa.gz
+
+The genome is composed of:
+  • Integrated reference sequence from the GRCh37 primary assembly (chromosomal plus unlocalized
+  and unplaced contigs)
+  • The rCRS mitochondrial sequence (AC:NC_012920)
+  • Human herpesvirus 4 type 1 (AC:NC_007605)
+  • Concatenated decoy sequences (hs37d5cs.fa.gz)
+  For details, please see ftp://ftp.1000genomes.ebi.ac.uk/vol1/ftp/technical/reference/
+  phase2_reference_assembly_sequence/README_human_reference_20110707.
+
+```{r}
+# When reads are paired-end, we need to extract separately the ranges corresponding to their
+# first ends (aka first segments in BAM jargon) and those corresponding to their last ends (aka last segments in BAM jargon):
+grl_first <- grglist(first(bam.clean, real.strand=TRUE),
+                     order.as.in.query=TRUE)
+
+grl_last <- grglist(last(bam.clean, real.strand=TRUE), 
+                    order.as.in.query=TRUE)
+
+```
+
+```{r}
+#Then we extract the portions of the reference genome corresponding to the ranges in GRangesList
+rqseq1 <- extractTranscriptSeqs(BSgenome.Hsapiens.1000genomes.hs37d5, grl_first)
+rqseq2 <- extractTranscriptSeqs(BSgenome.Hsapiens.1000genomes.hs37d5, grl_last)
+
+head(rqseq1)
+length(rqseq1) #7730
+```
+
+#Project  Alignements on the Transcriptome
+
+```{r}
+#start by using extractTranscriptSeqs again to extract the transcript sequences (aka
+# transcriptome) from the  reference genome:
+txseq <- extractTranscriptSeqs(BSgenome.Hsapiens.1000genomes.hs37d5, exons)
+txseq
+```
+width seems off: ensembl GRCh37 shows 11,465 pb transcript length...
+
+```{r}
+#The extractQueryStartInTranscript function computes for each overlap the position of the
+# query start in the transcript:
+Lqstart <- extractQueryStartInTranscript(grl, exons,
+                                         hits=olaps, ovenc=olap_enc, 
+                                         flip.query.if.wrong.strand=TRUE,
+                                         for.query.right.end=FALSE) #"left read" of the read pair
+
+head(subset(Lqstart, comp))
+dim(Lqstart)
+table(subset(Lqstart, comp)$firstSpannedExonRank)
+```
+
+```{r}
+Rqstart <- extractQueryStartInTranscript(grl, exons,
+                                         hits=olaps, ovenc=olap_enc, 
+                                         flip.query.if.wrong.strand=TRUE,
+                                         for.query.right.end=TRUE) #"Right read" of the read pair
+
+head(subset(Rqstart, comp))
+dim(Rqstart)
+table(subset(Rqstart, comp)$firstSpannedExonRank)
+```
+
+1. startInTranscript: the 1-based start position of the read with respect to the transcript.
+Position 1 always corresponds to the first base on the 5’ end of the transcript
+sequence.
+2. firstSpannedExonRank: the rank of the first exon spanned by the read, that is, the
+rank of the exon found at position startInTranscript in the transcript.
+3. startInFirstSpannedExon: the 1-based start position of the read with respect to the
+first exon spanned by the read.
+
+```{r}
+#  allows us  to compare the read and transcript nucleotide sequences for each “splice compatible” overlap. If we use the reference query sequence instead of the original query sequence for this comparison, then it should match exactly the sequences of the “left” and “right” ends of the read in the transcript.
+Lrqseq <- rqseq1[queryHits(olaps)]
+Rrqseq <- rqseq2[queryHits(olaps)]
+```
+
+```{r}
+flip_idx <- which(flippedQuery(olap_enc)) #none in my dataset have flipped +/- orientation
+flip_idx
+```
+
+```{r}
+#assign the transcript sequence to each overlap:
+sample_txseq <- txseq[subjectHits(olaps)] # All are identical since the "hit" is for CBL gene only
+
+head(sample_txseq)
+tail(sample_txseq)
+length(sample_txseq)
+```
+
+```{r}
+# For each “splice compatible” overlap, we expect the “left and right reference query sequences” of the read to be exact substrings of the transcript sequence.
+leftSeqs <- Lrqseq[comp]
+
+refSeqs <- narrow(sample_txseq[comp],
+                  start=Lqstart$startInTranscript[comp],
+                  width=width(Lrqseq)[comp])
+
+sequence_check <- leftSeqs == refSeqs#FALSE
+table(sequence_check)
+```
+
+```{r}
+reverseComplement(leftSeqs[1])
+refSeqs[1]
+```
+
+
+
+
+
+
+
+#Session Info
+
+```{r}
+sessionInfo()
+```
+

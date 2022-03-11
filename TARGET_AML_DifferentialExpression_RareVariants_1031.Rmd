@@ -1,0 +1,162 @@
+---
+title: "Differential Expression of Rare  Variants"
+author: "Jenny Smith"
+date: "June 20, 2017"
+output: html_document
+---
+
+
+Updated this to use the newest CDEs with all eligable patients currently. 6/27/18 
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '/fh/fast/meshinchi_s/workingDir/TARGET/AML_TARGET/RNA/mRNAseq/analysis/2017.06.20_DEGs_RareVariants/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(dplyr)
+library(tibble)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline_3.21.18.r")
+source("~/scripts/survival_analysis//Survplot_Functions_2017.03.31.r")
+```
+
+
+
+
+#Read in the counts
+
+```{r}
+counts <- read.csv("~/RNA_seq_Analysis/0000.00.03_Expression_Matrices/TARGET_AML_AAML1031_dupGenesRemoved_FractionalCounts.csv", stringsAsFactors = FALSE, row.names = 1)
+
+colnames(counts) <- str_split_fixed(colnames(counts), "\\.", n=3)[,1]
+head(counts[,1:5])
+```
+
+
+#Read in the clinical Data
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_1031_CDE_cleaned_4.18.2018.csv", stringsAsFactors = FALSE, row.names=1)
+
+CDE.1031 <- CDE.1031 %>% 
+  filter(!is.na(USI)) %>% 
+  set_rownames(.$USI)
+  
+head(CDE.1031[,1:5])
+```
+
+
+#Select Columns for Differntial Expression 
+
+```{r}
+# colnames(CDE.1031)
+```
+
+```{r}
+cols <- colnames(CDE.1031)[c(75,77:81,89,92:93,95:96)]
+cols
+```
+
+```{r}
+#Check that they do not have different factor levels besides No, Yes, Unknown
+sapply(CDE.1031[,cols], unique) 
+```
+
+
+
+#Perform Differential Expression Analysis 
+
+Limma voom with LogCPM and TMM normalized counts. Rare Variant AML vs All Other AML
+
+Using Fractional Counts as Input. 
+
+```{r message=FALSE,warning=FALSE,fig.height=10, fig.width=10}
+# pdf(file="TARGET_AML_1031_RareVariant_vs_otherAML_DEGs_Heatmaps.pdf")
+
+DEGs.RareVariants <- lapply(cols, twoGroups_DEGs, 
+                            expnData=counts, 
+                            clinData=CDE.1031,
+                            logCPM=FALSE,
+                            BM=FALSE, 
+                            ref="No")
+
+names(DEGs.RareVariants) <- cols
+
+# dev.off()
+```
+
+```{r}
+summary(DEGs.RareVariants)
+DEGs.RareVariants$Monosomy.5.del.5q.._Cleaned$GroupA # One patient. Will remove
+DEGs.RareVariants <- DEGs.RareVariants[-6]
+
+# saveRDS(DEGs.RareVariants, "TARGET_AML_1031_RareVariants_vs_OtherAML_list.RDS")
+```
+
+```{r}
+# dir.create(paste(getwd(), "PCA_Plots", sep = "/"))
+# path <- paste(getwd(), "PCA_Plots", sep = "/")
+PCA.otherAML <- lapply(DEGs.RareVariants, extract_PCA)
+MDS.otherAML <- lapply(DEGs.RareVariants, extract_MDS)
+# MDS.otherAML
+```
+
+```{r}
+RareVsOtherAML_DEGs <- lapply(DEGs.RareVariants, extract_DEGs)
+#Save DEGs to file
+# invisible(lapply(1:length(RareVsOtherAML_DEGs), function(i) write.csv(RareVsOtherAML_DEGs[[i]],
+#                                                                       file=paste0("TARGET_AML_1031_", names(RareVsOtherAML_DEGs[i]),
+#             "_vs_OtherAML_DEGs.csv", sep=""))))
+```
+
+
+#Differential Expression of AML Rare Variants versus Normal BM
+
+```{r fig.height=10, fig.width=10, message=FALSE}
+# pdf(file="TARGET_AML_1031_RareVariantsvsNormalBM_DEGs_Heatmaps.pdf")
+
+DEGs.RareVar_BM <- lapply(cols, twoGroups_DEGs, 
+                          expnData=counts, 
+                          clinData=CDE.1031, 
+                          logCPM=FALSE,
+                          ref="No",
+                          BM=TRUE)
+
+names(DEGs.RareVar_BM) <- cols
+
+# dev.off()
+```
+
+```{r}
+summary(DEGs.RareVar_BM)
+DEGs.RareVar_BM$Monosomy.5.del.5q.._Cleaned$GroupA # One patient. Will remove
+DEGs.RareVar_BM <- DEGs.RareVar_BM[-6]
+```
+
+```{r}
+RareVsBM_DEGs_only <- lapply(DEGs.RareVar_BM, extract_DEGs)
+
+# lapply(1:length(RareVsBM_DEGs_only), function(i) write.csv(RareVsBM_DEGs_only[[i]],
+#                                                            file=paste0("TARGET_AML_1031_", names(RareVsBM_DEGs_only[i]),"vs_NormalBM_DEGs.csv")))
+```
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+
+
+
+

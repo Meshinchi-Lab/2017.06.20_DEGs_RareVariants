@@ -1,0 +1,400 @@
+---
+title: "Differential Expression of Rare  Variants"
+author: "Jenny Smith"
+date: "June 20, 2017"
+output: html_document
+---
+
+
+Updated this to use the limma voom. 6/27/18
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '~/RNA_seq_Analysis/2017.06.20_DEGs_RareVariants/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+getwd()
+```
+
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline_3.21.18.r")
+source("~/scripts/Survival_Analysis/Survplot_Functions_2017.03.31.r")
+```
+
+
+#Define Functions to be used
+
+
+#Read in the counts
+
+
+```{r}
+
+```
+
+
+#Read in the clinical Data
+
+```{r}
+clinData <- read.csv("~/reference_mapping-files/TARGET_AML_current_asof_june30_2016_UPDATED_RhondaEdit_2017.06.08.csv", stringsAsFactors = FALSE, row.names=1)
+
+dim(clinData)
+```
+
+```{r}
+head(clinData[,c(1, 10:12)])
+```
+
+
+#Select Columns for Differntial Expression 
+
+```{r}
+colnames(clinData)
+```
+
+```{r}
+cols <- colnames(clinData)[28:45]
+```
+
+```{r}
+#Check that they do not have different factor levels besides No, Yes, Unknown
+sapply(clinData[,cols], unique) 
+```
+
+
+
+#Select Fusions for Differential Expression
+
+Note: DEK-NUP214 is t(6;9)
+Inv(16) is CBFB-MYH11
+t(8;21) is RUNX1-RUNX1T1
+
+```{r}
+# clinData$Known.Fusions <- gsub("\\s", "", clinData$Known.Fusions) #remove exra whitespace
+unique(clinData$Reason)
+# unique(clinData$Fusion.Cluster.Category)
+```
+
+```{r}
+#Select fusions of interest
+fusions <- c("NUP98-KDM5A", "NUP98-NSD1","NUP98-HOXD13","NUP98-PHF23","NUP98-HMGB3", "NPM1","MECOM","KAT6A Fusion","ETS Fusion")
+
+
+#Define the phenotype vectors
+fusionAnnotations <- as.data.frame(lapply(fusions, function(fusion) ifelse(grepl(fusion, clinData$Reason), gsub("\\-|\\s", "\\.",fusion), "otherAML") %>% 
+                                            set_names(clinData$TARGET.USI.1)), stringsAsFactors=FALSE)
+
+colnames(fusionAnnotations) <- gsub("\\-|\\s", "\\.", fusions)
+
+# head(fusionAnnotations)
+dim(fusionAnnotations)
+# sapply(fusionAnnotations, unique)
+```
+
+
+```{r}
+unique(clinData$Fusion.Cluster.Category)
+```
+
+```{r}
+#Select fusions of interest
+fusions2 <- c("CBFA2T3-GLIS2","NUP98-X", "ETS", "MECOM")
+
+#Define the phenotype vectors
+fusionAnnotations2 <- as.data.frame(lapply(fusions2, function(fusion) ifelse(grepl(fusion, clinData$Fusion.Cluster.Category), gsub("\\-|\\s", "\\.",fusion), "otherAML") %>% set_names(clinData$TARGET.USI.1)), stringsAsFactors=FALSE)
+
+colnames(fusionAnnotations2) <- gsub("\\-|\\s", "\\.", fusions2)
+
+# head(fusionAnnotations2)
+dim(fusionAnnotations2)
+# sapply(fusionAnnotations2, unique)
+```
+
+```{r}
+fusionAnnotations <- transform(merge(fusionAnnotations, fusionAnnotations2, by.x=0, by.y=0), 
+                               row.names = Row.names, 
+                               Row.names=NULL) 
+dim(fusionAnnotations)
+# head(fusionAnnotations)
+```
+
+
+```{r}
+#merge clincal data with the fusion data
+clinData.withFusions <- merge(clinData, fusionAnnotations, by.x="TARGET.USI.1", by.y=0, stringsAsFactors=FALSE) %>% 
+  set_rownames(., .[,"TARGET.USI.1"])
+
+dim(clinData.withFusions)
+head(clinData.withFusions[,c(76,77,78,79)])
+```
+
+```{r}
+fusionCols <- colnames(fusionAnnotations)[1:9]
+
+sapply(clinData.withFusions[,fusionCols], unique)
+```
+
+```{r}
+# clinData.withFusions$OS.ID <- ifelse(clinData.withFusions$Vital.Status == "Alive", 0, 1)
+# clinData.withFusions$Event.ID <- ifelse(clinData.withFusions$First.Event == "Censored", 0, 1)
+# write.csv(clinData.withFusions, "TARGET_AML_CDEs_withFusionCols_19July2017.csv")
+```
+
+#Survival Analysis for ASH 
+
+#Overall Survival 
+```{r}
+clinData.withFusions$NUP98.KDM5A <- relevel(as.factor(clinData.withFusions$NUP98.KDM5A), ref="otherAML")
+clinData.withFusions$CBFA2T3.GLIS2 <- relevel(as.factor(clinData.withFusions$CBFA2T3.GLIS2), ref="otherAML")
+
+Fus.Names <- c("NUP98.KDM5A", "CBFA2T3.GLIS2")
+OS <- lapply(c("NUP98.KDM5A", "CBFA2T3.GLIS2"), FUN = SurvObjects,df=clinData.withFusions,
+             colNames=c("Overall.Survival.Time.in.Days","OS.ID"),
+             time="DtoY") 
+names(OS) <- Fus.Names
+OS
+```
+```{r}
+summary(OS$CBFA2T3.GLIS2$CoxPH)
+```
+
+```{r}
+OS.fit <- list(OS$NUP98.KDM5A$survFit, OS$CBFA2T3.GLIS2$survFit)
+NUPColors <- c(NUP98.KDM5A="firebrick1", otherAML="lightskyblue4")
+CBFColors <- c(CBFA2T3.GLIS2="red", otherAML="darkblue")
+colors <- list(NUPColors, CBFColors)
+```
+
+```{r}
+OS.plots <- mapply(FUN=SurvivalPlot, OS.fit, colors, 
+                   MoreArgs = list(LegendTitle="Overall Survival 0531", timeUnit="Years"), SIMPLIFY = FALSE)
+
+names(OS.plots) <- Fus.Names
+```
+
+```{r}
+lapply(names(OS.plots), function(i) ggsave(filename=paste0("OS_",i,".pdf"), plot=OS.plots[[i]], device = "pdf", width = 7, height = 5, unit="in"))
+```
+
+
+#Event-Free Survival 
+
+```{r}
+EFS <- lapply(c("NUP98.KDM5A", "CBFA2T3.GLIS2"), FUN = SurvObjects,df=clinData.withFusions,
+             colNames=c("Event.Free.Survival.Time.in.Days","Event.ID"),
+             time="DtoY") 
+names(EFS) <- Fus.Names
+EFS
+```
+
+
+```{r}
+EFS.fit <- list(EFS$NUP98.KDM5A$survFit, EFS$CBFA2T3.GLIS2$survFit)
+
+EFS.plots <- mapply(FUN=SurvivalPlot, EFS.fit, colors, 
+                   MoreArgs = list(LegendTitle="Event-Free Survival 0531", timeUnit="Years"), 
+                   SIMPLIFY = FALSE) 
+names(EFS.plots) <- Fus.Names
+EFS.plots
+```
+
+```{r}
+# lapply(names(EFS.plots), function(i) ggsave(filename=paste0("EFS_",i,".pdf"), plot=EFS.plots[[i]], device = "pdf", width = 7, height = 5, unit="in"))
+```
+
+
+#Perform Differential Expression Analysis 
+
+#Limma Trend with LogCPM and TMM normalized counts. Rare Variant AML vs All Other AML
+
+Using Fractional Counts as Input
+```{r message=FALSE,warning=FALSE}
+# pdf(file="TARGET_AML_RareVariant_vs_otherAML_DEGs_Heatmaps_10July2017.pdf")
+DEGs.RareVariants <- lapply(cols, twoGroups_DEGs, expnData=counts$LD, clinData=clinData, ref="No")
+names(DEGs.RareVariants) <- cols
+# dev.off()
+```
+
+```{r}
+summary(DEGs.RareVariants)
+# invisible(lapply(names(DEGs.RareVariants), function(x) save(DEGs.RareVariants[[x]], file=paste0(x,".RData"))))
+# lapply(names(DEGs.RareVariants), function(i) head(DEGs.RareVariants[[i]]))
+```
+
+
+#Limma Trend with LogCPM and TMM normalized counts. Rare Fusion variant AML vs All Other AML
+
+```{r message=FALSE,warning=FALSE}
+# pdf(file="TARGET_AML_RareFusions_vs_otherAML_DEGs_Heatmaps_10July2017.pdf")
+DEGs.fusions <- lapply(fusionCols, twoGroups_DEGs, expnData=counts$LD, clinData=clinData.withFusions, ref="otherAML")
+names(DEGs.fusions) <- fusionCols
+# dev.off()
+```
+
+```{r}
+# summary(DEGs.fusions)
+```
+
+
+
+
+#Examine QC plots
+```{r}
+# dir.create(paste(getwd(), "PCA_Plots", sep = "/"))
+# path <- paste(getwd(), "PCA_Plots", sep = "/")
+PCA.otherAML <- lapply(DEGs.RareVariants, extract_PCA)
+
+RareVsOtherAML_DEGs <- lapply(DEGs.RareVariants, extract_DEGs)
+#Save DEGs to file
+# invisible(lapply(1:length(RareVsOtherAML_DEGs), function(i) write.csv(RareVsOtherAML_DEGs[[i]], 
+                                                                     # file=paste0("TARGET_AML_", names(RareVsOtherAML_DEGs[i]), 
+                                                                     #             "vsOtherAML_DEGs.csv", sep=""))))
+```
+
+
+```{r}
+
+```
+
+
+
+#Differential Expression of AML Rare Variants versus Normal BM
+
+```{r}
+# pdf(file="TARGET_AML_RareVariantsvsNormalBM_DEGs_Heatmaps_28June2017.pdf")
+DEGs.RareVar_BM <- lapply(cols, twoGroups_DEGs, expnData=counts$LD, clinData=clinData, ref="No", BM=TRUE)
+names(DEGs.RareVar_BM) <- cols
+
+# dev.off()
+```
+
+```{r}
+summary(DEGs.RareVar_BM)
+```
+
+```{r}
+sapply(DEGs.RareVar_BM, function(x) if (length(x) > 4) {extract_N.DE_NormFact(x)}) #Look at the number of DE genes
+```
+
+
+```{r}
+RareVsBM_DEGs_only <- lapply(DEGs.RareVar_BM, extract_DEGs)
+
+# lapply(1:length(RareVsBM_DEGs_only), function(i) write.csv(RareVsBM_DEGs_only[[i]],
+#                                                            file=paste0("TARGET_AML_", names(RareVsBM_DEGs_only[i]),"vsNormalBM_DEGs.csv")))
+```
+
+
+#Session Information 
+
+```{r}
+sessionInfo()
+```
+
+
+```{r}
+twoGroups_DEGs <- function(expnData, clinData, col, ref,logCPM=TRUE,BM=FALSE){
+  # expnData is a matrix or data frame with the raw counts. Patient IDs as colnames, genes as rownames
+  #clindata has patient IDs as rownames. 
+  #col is a character string of the factor column of interest
+  #ref is the character strign of the reference group level (eg BM, Neg, or control)
+  library(magrittr)
+  library(genefilter)
+  
+  
+  #remove unknown categories from the datasets since only want yes/no or 0/1 groups
+  rmUnknowns <- function(clinData, cols){
+    removeUnknowns <- clinData
+    
+    for (i in 1:length(cols)){
+      removeUnknowns <- removeUnknowns[!grepl("Unknown",removeUnknowns[, cols[i]]), ] 
+    }
+    return(removeUnknowns)
+  }
+  
+  dataName <- substitute(expnData)
+  variantName <- col
+  # print(name)
+  clinData <- rmUnknowns(clinData, col)
+  groups <- GroupIDs(clinData, col) #list of patient IDs, one for each group
+  
+
+  if (BM == TRUE){
+    BM <- grep("^BM", colnames(expnData), value = TRUE)
+    GroupB <- BM #select the reference group 
+    GroupA <- groups[[which(names(groups) != ref)]] %>% intersect(. , colnames(expnData)) #the second group (mutant, AML, treated, etc)
+  }else{
+    GroupB <- groups[[ref]] %>% intersect(. , colnames(expnData)) #select the reference group (eg No, normal, wt, control, etc.) Must be a character(level) from the column of clinData selected. 
+    GroupA <- groups[[which(names(groups) != ref)]] %>% intersect(. , colnames(expnData)) #the second group (mutant, AML, treated, etc)
+  }
+  
+  if (any(lapply(list(GroupA,GroupB), length) < 3)){
+    list <- list(expnData, clinData, GroupA,GroupB)
+    names(list) <- c("InputExpnData", "InputClinData", "CompGroup", "RefGroup")
+    return(list)
+  }
+  
+  phenoVector <- phenoVectors(GroupA, GroupB)
+
+  if (identical(GroupB,BM)){
+    clinData <- as.data.frame(phenoVector) %>% set_colnames(., "Group")
+    col <- "Group"
+  }else{
+    clinData = clinData
+  }
+
+  # return(phenoVector)
+  #subset and order the dataframe.
+  expnData <- expnData[,match(c(GroupA, GroupB), colnames(expnData))] #mutant, then WT
+
+  # return(phenoVector)
+  # Calculate Differential Expression
+  print(c("logCPM", logCPM))
+  DE <- calcDE(expnData,GroupA, GroupB, logCPM=logCPM, Trend = TRUE) #mutant - wild type. logCPM the counts
+  # NOTE: I included a more stringent filter here, so 5% of samples must have logCPM of greater than 1 for inclusion in analysis
+  # this usually results in ~18,000 genes included in each analysis.
+
+  if (nrow(DE$DE) < 1){
+    PCA <- plotPCA(expnData, clinData, col)
+    list <- list(clinData, phenoVector, expnData, DE, PCA)
+    names(list) <- c("InputClinData", "phenovector", "InputExpnMatrix", "DE","PCA")
+    return(DE)
+  }else{
+
+    #Top Varied genes
+    genes <- rownames(expnData[order(rowVars(expnData),decreasing=TRUE), ])[1:500]
+
+    #Unsupervised Heirachrach clustering
+    dends_DE <- dge_dendrograms(expnData, phenoVector, rownames(DE$DE), method="ward.D2") #dendrograms based on all differentially expressed genes.
+    colorBar <- ifelse(phenoVector == "GroupB", "black", "firebrick")
+    # title <- paste(variantName, dataName, sep=" ")
+    title <- variantName
+    heatmap <- basicHeatmap(dends_DE$TMMCPM, dends_DE$c2, dends_DE$c1,colorBar, title=title)
+
+    #Unconstrained Cluster Analysis
+    # PCoA
+    MDS <- plotPCoA((2^DE$dge),clinData,genes,col) #not log2. cannot have negative values for bray-curtis distance
+    # PCA
+    PCA <- plotPCA(DE$dge, clinData, col)
+
+    #return the objects
+    list <- list(clinData, phenoVector, expnData, DE, genes, dends_DE, heatmap, MDS, PCA)
+    names(list) <- c("InputClinData", "phenovector", "InputExpnMatrix", "DE", "topVargenes", "dends_DE", "Heatmap", "MDS", "PCA")
+
+
+    return(list)
+  }
+}
+
+```
+
+
+
+

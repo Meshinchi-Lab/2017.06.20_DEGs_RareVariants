@@ -1,0 +1,1108 @@
+---
+title: "Survival Analysis NUP98-KDM5A and CBFGLIS"
+author: "Jenny Smith"
+date: "July 19, 2017"
+output: html_document
+---
+
+
+```{r setup}
+library(knitr)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=50),tidy=TRUE, fig.align='center')
+knitr::opts_knit$set(root.dir = '~/RNA_seq_Analysis/2017.06.20_DEGs_RareVariants/')
+```
+
+
+```{r message = FALSE, warning=FALSE}
+library(stringr)
+library(magrittr)
+library(ggplot2)
+library(tidyr)
+library(dplyr)
+library(plyr)
+getwd()
+```
+
+```{r}
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/DifferentialExpressionPipeline.r")
+source("~/scripts/survival_analysis/Survplot_Functions_2017.03.31.r")
+source("~/scripts/RNAseq_Analysis/DifferentialExpn_PathwayAnalysis/Heatmaps_Function.r")
+```
+
+
+#Read in the clinical Data
+
+```{r}
+RAM <- read.csv("~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/New_stratification_outcomes_updated_2017.03.28.csv", stringsAsFactors = FALSE, row.names = 1)
+head(RAM[,c(1,4,8)])
+```
+
+
+```{r}
+clinData <- read.csv("~/reference_mapping-files/TARGET_AML_current_asof_june30_2016_UPDATED_RhondaEdit_2017.06.08.csv", stringsAsFactors = FALSE, row.names=1)
+
+dim(clinData)
+```
+
+
+```{r}
+additionalGLIS <- read.csv("~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/CBFGLIS_from0531_from03P1.csv", stringsAsFactors = FALSE)
+additionalGLIS <- additionalGLIS[21:27,]
+
+# dim(additionalGLIS)
+head(additionalGLIS)
+# additionalGLIS
+```
+
+
+```{r}
+clinData <- rbind.fill(clinData, additionalGLIS)
+
+dim(clinData)
+```
+
+
+```{r}
+head(clinData[,c(1, 10:12)])
+```
+
+
+```{r}
+# write.csv(clinData, "~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/TARGET_AML_current_asof_june30_2016_withCBF-GLIS_2017.06.08.csv")
+```
+
+```{r}
+table(clinData$Fusion.Cluster.Category) #27 CBF-GLIS
+```
+
+#Select Columns 
+
+```{r}
+colnames(clinData)
+```
+
+```{r}
+cols <- colnames(clinData)[28:45]
+# cols
+```
+
+```{r}
+#Check that they do not have different factor levels besides No, Yes, Unknown
+table(sapply(clinData[,cols], unique) )
+```
+
+
+
+
+
+
+
+#Select Fusions 
+
+Note: DEK-NUP214 is t(6;9)
+Inv(16) is CBFB-MYH11
+t(8;21) is RUNX1-RUNX1T1
+
+```{r}
+# clinData$Known.Fusions <- gsub("\\s", "", clinData$Known.Fusions) #remove exra whitespace
+unique(clinData$Reason)
+# unique(clinData$Fusion.Cluster.Category)
+```
+
+```{r}
+#Select fusions of interest
+fusions <- c("NUP98-KDM5A", "NUP98-NSD1","NUP98-HOXD13","NUP98-PHF23","NUP98-HMGB3", "NPM1","MECOM","KAT6A Fusion","ETS Fusion")
+
+
+#Define the phenotype vectors
+fusionAnnotations <- as.data.frame(lapply(fusions, function(fusion) 
+  ifelse(grepl(fusion, clinData$Reason), gsub("\\-|\\s", "\\.",fusion), "otherAML") %>% 
+                                            set_names(clinData$TARGET.USI.1)), stringsAsFactors=FALSE)
+
+colnames(fusionAnnotations) <- gsub("\\-|\\s", "\\.", fusions)
+
+# head(fusionAnnotations)
+dim(fusionAnnotations)
+sapply(fusionAnnotations, unique)
+```
+
+
+```{r}
+unique(clinData$Fusion.Cluster.Category)
+```
+
+```{r}
+#Select fusions of interest
+fusions2 <- c("CBFA2T3-GLIS2","NUP98-X")
+
+#Define the phenotype vectors
+fusionAnnotations2 <- as.data.frame(lapply(fusions2, function(fusion) ifelse(grepl(fusion, clinData$Fusion.Cluster.Category), gsub("\\-|\\s", "\\.",fusion), "otherAML") %>%
+                                             set_names(clinData$TARGET.USI.1)), stringsAsFactors=FALSE)
+
+colnames(fusionAnnotations2) <- gsub("\\-|\\s", "\\.", fusions2)
+
+# head(fusionAnnotations2)
+dim(fusionAnnotations2)
+sapply(fusionAnnotations2, unique)
+```
+
+```{r}
+fusionAnnotations <- transform(merge(fusionAnnotations, fusionAnnotations2, by.x=0, by.y=0), row.names = Row.names, Row.names=NULL) 
+dim(fusionAnnotations)
+# head(fusionAnnotations)
+```
+
+```{r}
+RAM.vector  <- ifelse(grepl("RAM", RAM$Reason), "RAM", "otherAML") %>% set_names(., rownames(RAM))
+# RAM.vector
+```
+
+
+```{r}
+#merge clincal data with the fusion data
+
+clinData.withFusions <- merge(clinData, fusionAnnotations, 
+                              by.x="TARGET.USI.1", by.y=0, stringsAsFactors=FALSE) %>% 
+  set_rownames(., .[,"TARGET.USI.1"])
+
+clinData.withFusions <- merge(clinData.withFusions, RAM.vector, by.x=0, by.y=0, all.x = TRUE, stringsAsFacors=FALSE) %>% 
+  set_rownames(., .[,"TARGET.USI.1"])
+
+colnames(clinData.withFusions)[which(colnames(clinData.withFusions) == "y")] <- "RAM"
+
+clinData.withFusions$RAM <- ifelse(is.na(clinData.withFusions$RAM), "otherAML", as.character(clinData.withFusions$RAM))
+```
+
+
+```{r}
+#Cleanup the data
+clinData.withFusions$Fusion.Cluster.Category <- ifelse(clinData.withFusions$Fusion.Cluster.Category == "", clinData.withFusions$Known.Fusions, clinData.withFusions$Fusion.Cluster.Category)
+
+clinData.withFusions$Bone.marrow.leukemic.blast.percentage.... <- as.numeric(as.character(ifelse(clinData.withFusions$Bone.marrow.leukemic.blast.percentage.... == ".", NA, clinData.withFusions$Bone.marrow.leukemic.blast.percentage....)))
+
+clinData.withFusions$OS.ID <- ifelse(clinData.withFusions$Vital.Status == "Alive", 0, 1)
+clinData.withFusions$Event.ID <- ifelse(clinData.withFusions$First.Event == "Censored", 0, 1)
+
+
+# dim(clinData.withFusions) # 993  by 91
+head(clinData.withFusions[,c(76,77,78,79)])
+# write.csv(clinData.withFusions, "TARGET_AML_CDEs_withFusionCols_11.15.2017.csv")
+```
+
+
+```{r}
+table(clinData.withFusions$CBFA2T3.GLIS2)
+```
+
+
+
+#Survival Analysis for AAML0531
+
+#Overall Survival 
+```{r message=FALSE}
+clinData.withFusions$NUP98.KDM5A <- relevel(as.factor(clinData.withFusions$NUP98.KDM5A), ref="otherAML")
+clinData.withFusions$CBFA2T3.GLIS2 <- relevel(as.factor(clinData.withFusions$CBFA2T3.GLIS2), ref="otherAML")
+
+Fus.Names <- c("NUP98.KDM5A", "CBFA2T3.GLIS2")
+OS <- lapply(c("NUP98.KDM5A", "CBFA2T3.GLIS2"), FUN = SurvObjects,df=clinData.withFusions,
+             colNames=c("Overall.Survival.Time.in.Days","OS.ID"),
+             time="DtoY") 
+names(OS) <- Fus.Names
+# lapply(OS, function(x) x[2:4])
+```
+
+
+```{r}
+summary(OS$CBFA2T3.GLIS2$CoxPH)
+# OS$CBFA2T3.GLIS2$survFit
+```
+
+```{r}
+# summary(OS$NUP98.KDM5A$CoxPH)
+```
+
+```{r}
+# summary(OS$NUP98.KDM5A$survFit, time=c(0,3,5))
+```
+
+
+#Kaplan-Meier Plots
+
+```{r}
+OS.fit <- list(OS$NUP98.KDM5A$survFit, OS$CBFA2T3.GLIS2$survFit)
+NUPColors <- c(NUP98.KDM5A="firebrick1", otherAML="lightskyblue4")
+CBFColors <- c(CBFA2T3.GLIS2="red", otherAML="darkblue")
+colors <- list(NUPColors, CBFColors)
+```
+
+
+```{r message=FALSE}
+OS.plots <- mapply(FUN=SurvivalPlot, OS.fit, colors, 
+                   MoreArgs = list(LegendTitle="Overall Survival 0531", timeUnit="Years"), SIMPLIFY = FALSE)
+
+names(OS.plots) <- Fus.Names
+```
+
+```{r message=FALSE}
+# pdf(file="TARGET_AML_NUP98KDM5A_vs_OtherAML_OSplot.pdf", height = 5, width = 7)
+OS.plots$NUP98.KDM5A + xlim(0,6)
+# dev.off()
+
+OS.plots$CBFA2T3.GLIS2
+```
+
+```{r}
+# lapply(names(OS.plots), function(i) ggsave(filename=paste0("OS_",i,".pdf"), plot=OS.plots[[i]], device = "pdf", width = 7, height = 5, unit="in"))
+```
+
+
+#Event-Free Survival 
+
+```{r}
+EFS <- lapply(c("NUP98.KDM5A", "CBFA2T3.GLIS2"), FUN = SurvObjects,df=clinData.withFusions,
+             colNames=c("Event.Free.Survival.Time.in.Days","Event.ID"),
+             time="DtoY") 
+names(EFS) <- Fus.Names
+
+# lapply(EFS, function(x) x[2:4])
+```
+
+```{r}
+# EFS$CBFA2T3.GLIS2$survFit
+# EFS$CBFA2T3.GLIS2$log.rank
+```
+
+
+#Kaplan-Meier Plots
+
+```{r message=FALSE}
+EFS.fit <- list(EFS$NUP98.KDM5A$survFit, EFS$CBFA2T3.GLIS2$survFit)
+
+EFS.plots <- mapply(FUN=SurvivalPlot, EFS.fit, colors, 
+                   MoreArgs = list(LegendTitle="Event-Free Survival 0531", timeUnit="Years"), 
+                   SIMPLIFY = FALSE) 
+names(EFS.plots) <- Fus.Names
+EFS.plots
+```
+
+```{r}
+# lapply(names(EFS.plots), function(i) ggsave(filename=paste0("EFS_",i,".pdf"), plot=EFS.plots[[i]], device = "pdf", width = 7, height = 5, unit="in"))
+```
+
+
+#Survival Analysis on 1031
+
+```{r}
+CDE.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_AAML1031_merged_CDE_Cleaned_28Sept2017.csv",
+                     stringsAsFactors = FALSE,row.names = 1,
+                     na.strings = c("","#N/A"," ","NA"))
+
+dim(CDE.1031)
+```
+
+
+```{r}
+head(CDE.1031)
+```
+
+
+```{r message=FALSE, warning=FALSE}
+#this code was used to create TARGET_AML_AAML1031_merged_CDE_Cleaned_20Sept2017.csv. Not needed now
+# CDE.1031[,6:55] <- sapply(CDE.1031[,6:55], function(x) ifelse(is.na(x), "Not available", x))
+# CDE.1031[,6:55] <- sapply(CDE.1031[,6:55], function(x) ifelse(x=="Not evaluated", "Not available", x))
+# CDE.1031[,c(7,10,56:63)] <- sapply(CDE.1031[,c(7,10,56:63)], function(x) as.numeric(as.character(x)))
+# dim(CDE.1031)
+```
+
+```{r}
+# write.csv(CDE.1031, "~/reference_mapping-files/TARGET_AML_AAML1031_merged_CDE_Cleaned_20Sept2017.csv")
+# save(CDE.1031, file="TARGET_AML_1031_CDE_cleaned_20Sept2017.csv")
+```
+
+
+```{r}
+CBFGLIS.1031 <- read.csv("~/reference_mapping-files/TARGET_AML_CBFGLIS_1031dx5&underfusiondataFINAL.csv", stringsAsFactors = FALSE)
+# dim(CBFGLIS.1031) #only 288 were tested
+```
+
+
+```{r}
+# unique(CBFGLIS.1031$CBFT2A3.GLIS.Y.N) 
+pos.1031 <- CBFGLIS.1031[CBFGLIS.1031$CBFT2A3.GLIS.Y.N == "YES",]$REG.
+neg.1031 <- CBFGLIS.1031[CBFGLIS.1031$CBFT2A3.GLIS.Y.N == "",]$REG.
+
+length(pos.1031) #13
+length(neg.1031)
+```
+
+```{r}
+RAM <- read.csv("~/reference_mapping-files/TARGET_AML_RAM_1031_05112017.csv", stringsAsFactors = FALSE)
+head(RAM[,1:3])
+```
+
+```{r message=FALSE, warning=FALSE}
+RAM.Clean <- RAM %>%
+  separate(Patient.registration.number, sep="[ \\-]", into=c("Reg", "Initials"))
+
+head(RAM.Clean[,1:3])
+```
+
+
+```{r}
+CDE.1031 <- CDE.1031 %>% 
+  mutate(CBFGLIS.Status=ifelse(Patient.ID %in% pos.1031, "Yes", ifelse(Patient.ID %in% neg.1031, "No", "Unknown"))) %>% #13 CBF-GLIS of 13 are in CDE
+  mutate(RAM.Status=ifelse(Patient.ID %in% RAM.Clean$Reg, "Yes", "No")) %>%  #16 RAM of the 33 have CDE information
+  mutate(Age.yrs=Age..Days./365.24)
+
+dim(CDE.1031) #1559 
+head(CDE.1031[,c("CBFGLIS.Status", "RAM.Status", "Age.yrs")])
+```
+
+```{r}
+# write.csv(CDE.1031, "TARGET_AML_1031_CDE_cleaned_11.15.2017.csv", row.names = FALSE)
+```
+
+
+
+```{r}
+#Clean the clinical data
+CDE.1031.withOS <- CDE.1031 %>% 
+  mutate(CBFGLIS.Status=ifelse(Patient.ID %in% pos.1031, "yes", "no")) %>% #13 CBF-GLIS of 13 are in CDE
+  mutate(RAM.Status=ifelse(Patient.ID %in% RAM.Clean$Reg, "yes", "no")) %>%  #16 RAM of the 33 have CDE information
+  filter(! is.na(osi)) %>%
+  mutate(Age.yrs=Age..Days./365.24)
+  
+head(CDE.1031.withOS)
+```
+
+
+```{r}
+# write.csv(CDE.1031, "~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/TARGET_AML_1031_CDE_cleaned_20Sept2017.csv", row.names = FALSE)
+```
+
+
+```{r}
+dim(CDE.1031.withOS)#667 patients 
+```
+
+```{r}
+os.cols <- c("yrsos", "osi")
+efs.cols <- c("yrsefs", "efsi")
+```
+
+```{r}
+OS.1031 <- SurvObjects(CDE.1031.withOS, os.cols, "CBFGLIS.Status")
+OS.1031$survFit
+OS.1031$Gehan.Breslow.Wilcoxon
+```
+
+```{r}
+EFS.1031 <- SurvObjects(CDE.1031.withOS, efs.cols, "CBFGLIS.Status")
+EFS.1031$survFit
+EFS.1031$log.rank
+```
+
+
+#Plot the Kaplan-Meiers
+
+```{r}
+os.plot <- SurvivalPlot(OS.1031$survFit, "CBFA2T2-GLIS2", "Years", c(yes="wheat4", no="wheat3"))
+os.plot <- os.plot + labs(title="AAML1031: Overall Survival") + geom_text(x=4.5,y=0.2, label="p < 0.001", size=5)
+os.plot
+
+# ggsave(filename = "OS_1031_CBFGLISvsOtherAML_KMplot.pdf", plot = os.plot,
+       # device = "pdf", height = 5, width = 7, units = "in")
+```
+
+```{r}
+efs.plot <- SurvivalPlot(EFS.1031$survFit, "CBFA2T3-GLIS2", "Years", c(yes="wheat4", no="wheat3"))
+efs.plot <- efs.plot + labs(title="AAML1031:Event-Free Survival") + geom_text(x=4.5, y=0.2, label="p < 0.001", size=5)
+efs.plot
+
+# ggsave(filename = "EFS_1031_CBFGLISvsOtherAML_KMplot.pdf", plot = efs.plot, 
+#        device = "pdf", height = 5, width = 7, units = "in")
+```
+
+
+
+#Clinical Characterisitcs 
+
+
+## AAML0531 Clinical Characteristics 
+
+```{r message=FALSE}
+library(compareGroups)
+```
+
+```{r}
+clinCols <- c(
+  "Age.at.Diagnosis.in.Days",
+  "Gender", 
+  "WBC.at.Diagnosis",
+  "Bone.marrow.leukemic.blast.percentage....",
+  "Primary.Cytogenetic.Code",
+  "Fusion.Cluster.Category",
+  "t.8.21.",
+  "inv.16.",
+  "FLT3.ITD.positive.", 
+  "WT1.mutation",
+  "NPM.mutation",
+  "RAM", 
+  "NUP98.NSD1", 
+  "CBFA2T3.GLIS2", 
+  "KAT6A.Fusion", 
+  "NUP98.KDM5A"
+)
+```
+
+```{r}
+ageCats <- function(Age.Vector){
+  #age vector is a named vector with the patient ages. 
+  
+  ageCat <- function(age){
+    if (age < 5){
+      g <-"under5"
+    }else if (age >= 5 & age < 11 ){
+      g <- "Age5to10"
+    }else if (age >= 11 & age < 16){
+      g <- "Age11to15"
+    }else if (age >=16){
+      g <- "AgeGreater15"
+    }
+  }
+
+  ageCategories <- sapply(Age.Vector, ageCat)
+  
+  return(ageCategories)
+}
+```
+
+```{r}
+sub <- clinData.withFusions[,clinCols]
+sub$Age.Years <- sub$Age.at.Diagnosis.in.Days/365
+sub <- sub[,-1] 
+
+ages <- sub$Age.Years
+sub$Age.Categories <-  ageCats(ages)
+
+head(sub[,1:5])
+```
+
+
+#CBFGLIS2 in AAML0531
+```{r}
+comp.CBF <- compareGroups(CBFA2T3.GLIS2 ~ . ,data = sub, method=4, Q1=0, Q3=1)
+
+tab.CBF <- createTable(comp.CBF)
+
+tab.CBF
+export2csv(tab.CBF, "TARGET_AML_CBFGLIS_AAML0531_CDE_Table.csv")
+```
+
+
+#CBFGLIS with Flow Data
+
+```{r}
+flow <- read.csv("~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/FlowCytometry/TARGET_AML_CBFGLIS_PatientUSI_27June2017-2017-7-18FD_FLOWcytometetryData.csv", stringsAsFactors = FALSE, row.names = 1)
+flow <- flow[complete.cases(flow),] #removes NAs
+head(flow[,1:5])
+```
+
+```{r}
+dim(flow) #437 
+```
+
+```{r}
+#select only CBFGLIS with FLOW data
+sub.flow <- transform(merge(flow, sub, by.x=0, by.y=0), row.names=Row.names, Row.names=NULL) 
+head(sub.flow[,1:5])#10 CBF-GLIS patients, 437 patients  
+```
+
+#CBF and RAM in the flow Data
+
+```{r}
+comp.CBF.flow <- compareGroups(CBFA2T3.GLIS2 ~ RAM + CD56,method=4, data = sub.flow, Q1=0, Q3=1)
+
+createTable(comp.CBF.flow)
+```
+
+
+#Clinical Chars of  NUP98-KDM5A
+
+```{r}
+comp.NUP <- compareGroups(NUP98.KDM5A ~ ., method=4, Q1=0, Q3=1, data=sub)
+
+tab.NUP <- createTable(comp.NUP)
+
+tab.NUP
+# export2csv(tab.NUP, file="TARGET_AML_NUP98.KDM5A_ClinCharacteristicsTable.csv")
+```
+
+
+##AAML1031 Clinical Characteristics
+
+```{r}
+# colnames(CDE.1031)
+```
+
+```{r}
+forCDETable <- c("Age.yrs",
+                 "Gender", 
+                 "Race", 
+                 "RAM.Status",
+                 "CBFGLIS.Status", 
+                 "FLT3.ITD", 
+                 "CEBPA", 
+                 "NPM1",
+                 "Monosomy.5.del.5q..",
+                 "Abnormal.Karyotype.Inv.16.t.16.16.",
+                 "Abnormal.Karyotype..t.8.21..",
+                 "Abnormal.Karyotype.Monosomy.7.",
+                 "MRD.status")
+
+dat <- CDE.1031[,forCDETable]
+dim(dat)
+```
+
+```{r}
+comp <- compareGroups(CBFGLIS.Status ~ ., data = dat, method=4, Q1=0, Q3=1)
+
+tab <- createTable(comp)
+tab
+```
+
+```{r}
+# export2csv(tab, file = "TARGET_AAML1031_CBFGLIS_CDE_Table.csv")
+# export2latex(tab, file="TARGET_AAML1031_CBFGLIS_CDE_Table.tex")
+```
+
+
+
+```{r}
+CDE.1031 %>%
+  filter(Cytogenetic.test.result. == "Normal" & CBFGLIS.Status == "yes") %>%
+  select(USI)
+```
+
+```{r}
+library(dplyr)
+clinData.withFusions %>%
+  filter(Primary.Cytogenetic.Code == "Normal" & CBFA2T3.GLIS2 == "CBFA2T3.GLIS2") %>%
+  select(TARGET.USI.1)
+```
+
+```{r}
+perCent.CytoNormal <- round((4 + 11)/33 * 100, digits=2)
+perCent.CytoNormal
+```
+
+```{r}
+sum(clinData.withFusions$Primary.Cytogenetic.Code == "Normal" & clinData.withFusions$CBFA2T3.GLIS2 == "otherAML") + sum(CDE.1031$Cytogenetic.test.result. == "Normal" & CDE.1031$CBFGLIS.Status == "no")
+```
+
+```{r}
+345/1625
+```
+
+```{r}
+table <- cbind(c(15,18), c(345, 1280)) %>% 
+  set_colnames(c("Pos", "Neg")) %>%
+  set_rownames(c("CN","Not CN"))
+
+chisq.test(table)
+```
+
+```{r}
+CDE.1031 %>% 
+  filter(CBFGLIS.Status == "yes" & Abnormal.Karyotype.Inv.16.t.16.16. == "Positive") %>% 
+  select(Karyotype)
+```
+
+
+
+#Combine 1031 and 0531 
+
+```{r}
+# colnames(clinData.withFusions)
+```
+
+```{r}
+# colnames(CDE.1031)
+```
+
+```{r}
+CDE.0531 <- clinData.withFusions %>%
+  mutate(Age.yrs=Age.at.Diagnosis.in.Days/365.25,
+         monosomy.5.del.5.q=ifelse(clinData.withFusions$del5q == "Yes" | clinData.withFusions$monosomy.5 == "Yes", "Yes", "No"),
+         EFS.yrs=Event.Free.Survival.Time.in.Days/365.25,
+         OS.yrs=Overall.Survival.Time.in.Days/365.25,
+         CBFA2T3.GLIS2=as.character(CBFA2T3.GLIS2),
+         CR1=ifelse( grepl("CR|Not in CR", clinData.withFusions$CR.status.at.end.of.course.1),clinData.withFusions$CR.status.at.end.of.course.1, NA),
+         MRD.EOI1=as.numeric(as.character(MRD...at.end.of.course.1)))
+```
+
+```{r}
+
+CDE.0531.cols <- c("TARGET.USI.1",
+  "Age.yrs",
+  "Gender", 
+  "Race",
+  "Ethnicity",
+  "WBC.at.Diagnosis",
+  "MRD.EOI1",
+  "Risk.group",
+  "t.8.21.",
+  "inv.16.",
+  "FLT3.ITD.positive.", 
+  "NPM.mutation",
+  "CEBPA.mutation",
+  "monosomy.5.del.5.q",
+  "monosomy.7",
+  "RAM", 
+  "CBFA2T3.GLIS2",
+  "CR1",
+  "EFS.yrs",
+  "OS.yrs",
+  "Event.ID",
+  "OS.ID")
+
+CDE.1031.cols <- c("USI",
+                 "Age.yrs",
+                 "Gender", 
+                 "Race",
+                 "Ethnicity",
+                 "wbc1",
+                 "MRD.percentage",
+                 "Cytogenetic.Risk.Group.",
+                 "Abnormal.Karyotype..t.8.21..",
+                 "Abnormal.Karyotype.Inv.16.t.16.16.",
+                 "FLT3.ITD",
+                 "NPM1",
+                 "CEBPA", 
+                 "Monosomy.5.del.5q..",
+                 "Abnormal.Karyotype.Monosomy.7.",
+                 "RAM.Status",
+                 "CBFGLIS.Status",
+                 "cr1",
+                 "yrsefs",
+                 "yrsos",
+                 "efsi",
+                 "osi")
+```
+
+What are the units for WBC? its not percent
+```{r}
+CDE.1031.m <- CDE.1031.withOS[,CDE.1031.cols] %>% set_colnames(CDE.0531.cols)
+
+merged <- rbind(CDE.0531[,CDE.0531.cols], CDE.1031.m) %>% 
+  mutate(Protocol=ifelse(TARGET.USI.1 %in% clinData.withFusions$TARGET.USI.1, "AAML0531", "AAML1031"),
+         WBC=as.numeric(as.character(WBC.at.Diagnosis)))
+
+head(merged)
+```
+
+```{r}
+dim(merged)
+```
+
+
+```{r}
+sapply(merged[,c(3:5,8:18)], unique)
+```
+
+
+```{r}
+#Fis Risk Group
+merged[merged == "High Risk"] <- "High"
+merged[merged == "Low Risk"] <- "Low"
+merged[merged == "Standard Risk"] <- "Standard"
+merged[merged == "Unable to determine" | merged == "Not available"] <- "Unknown"
+merged$Risk.group <- ifelse(merged$Risk.group == "10" | merged$Risk.group == "30", "Unknown", merged$Risk.group)
+
+#Fix Pos and Neg
+merged[merged == "Negative"| merged == "no"] <- "No"
+merged[merged == "Positive" | merged == "yes" ] <- "Yes"
+
+#Fix FLT3-ITD
+merged[merged == "Wild-type"] <- "No"
+merged[merged == "Internal tandem duplication"] <- "Yes"
+
+#Fix Fusion Cols
+merged[merged == "otherAML"] <- "No"
+merged[merged == "RAM"] <- "Yes"
+merged[merged == "CBFA2T3.GLIS2"] <- "Yes"
+
+#Fix CR
+merged$CR1 <- ifelse(merged$CR1 == "0", "Not in CR", merged$CR1 )
+merged$CR1 <- ifelse(merged$CR == "1", "CR", merged$CR1)
+```
+
+```{r}
+sapply(merged[,c(3:5,8:18)], unique)
+```
+
+```{r}
+merged <- unique(merged)
+dim(merged)
+```
+
+```{r}
+write.csv(merged, "~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/TARGET_AML_0531_1031_CDE_merged_11.15.17.csv", row.names = FALSE)
+# save(merged, file="~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/TARGET_AML_0531_1031_CDE_merged_14Sept2017.RData")
+# merged
+```
+
+
+```{r}
+final.order <- c("TARGET.USI.1",
+  "Protocol",
+  "Age.yrs",
+  "Gender",
+  "Race",
+  "Ethnicity",
+  "WBC",
+  "MRD.EOI1",
+  "Risk.group",
+  "t.8.21.",
+  "inv.16.",
+  "FLT3.ITD.positive.",
+  "NPM.mutation",
+  "CEBPA.mutation",
+  "monosomy.5.del.5.q",
+  "monosomy.7",
+  "RAM",
+  "CBFA2T3.GLIS2",
+  "CR1",
+  "EFS.yrs",
+  "OS.yrs",
+  "Event.ID",
+  "OS.ID")
+
+merged <- merged[,final.order]
+colnames(merged)
+```
+
+#Survival Analysis 
+
+```{r}
+os.cols2 <- c("OS.yrs", "OS.ID" )
+efs.cols2 <- c("EFS.yrs", "Event.ID")
+```
+
+#OS
+```{r}
+os.merged <- SurvObjects(merged, colNames = os.cols2, group="CBFA2T3.GLIS2")
+os.merged$survFit
+os.merged$log.rank
+```
+
+```{r}
+summary(os.merged$survFit, time=c(0,3,5))
+```
+
+
+```{r}
+summary(os.merged$CoxPH)
+```
+
+
+#EFS
+```{r}
+efs.merged <- SurvObjects(merged, colNames = efs.cols2, group="CBFA2T3.GLIS2")
+efs.merged$survFit
+efs.merged$log.rank
+```
+
+Check when the p-value is calculated. I beleive its when 50% of patients have an event (the median survival time)
+
+```{r}
+summary(efs.merged$survFit, time=c(0,3,5))
+```
+
+
+```{r}
+summary(efs.merged$CoxPH)
+```
+
+
+
+#Kaplan-Meier Plots 
+
+```{r}
+osplot <- SurvivalPlot(os.merged$survFit, "CBFA2T3-GLIS2", "Years", c(Yes="red", No="darkblue")) + labs(title="Overall Survival: CBFA2T3-GLIS2") + geom_text(x=10, y=0.15, label="p < 0.001", size=5)
+osplot
+
+# ggsave(filename = "overall_survival_CBFGLIS_0531_1031_KMplot.pdf", device = "pdf",
+       # height = 5, width = 7, units="in")
+```
+
+```{r}
+efsplot <- SurvivalPlot(efs.merged$survFit, "CBFA2T3-GLIS2", "Years", c(Yes="red", No="darkblue")) + 
+  labs(title="Event-Free Survival: CBFA2T3-GLIS2") + geom_text(x=10,y=0.1, label="p = 0.002", size=5)
+efsplot
+
+# ggsave(filename = "event-free_survial_CBFGLIS_0531_1031_KMplot.pdf", plot=efsplot, dev="pdf",
+       # height=5, width = 7)
+
+```
+
+
+
+#Clinical Characteristics
+
+```{r}
+library(compareGroups)
+
+comp.merge <- compareGroups(CBFA2T3.GLIS2 ~ ., data=merged[,-1], method =4 , Q1=0, Q3=1)
+tab.merge <- createTable(comp.merge)
+tab.merge
+```
+
+
+```{r}
+# export2latex(tab.merge,"~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/CBFGLIS_CDE_Table_0531_1031_14Sept2017.tex")
+# export2csv(tab.merge,"~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/CBFGLIS_CDE_Table_0531_1031_14Sept2017.csv")
+```
+
+
+
+#Ages 
+
+```{r}
+AgeCategory <- merged %>% 
+  filter(CBFA2T3.GLIS2 == "Yes") %>% 
+  mutate(AgeCat=ifelse(Age.yrs < 5, "under5", "over5")) %>%
+  mutate(percent=ifelse(AgeCat=="under5", sum(AgeCat=="under5")/33*100, sum(AgeCat=="over5")/33*100))
+```
+
+```{r}
+sum(AgeCategory$AgeCat == "under5")
+sum(AgeCategory$AgeCat == "over5") 
+```
+
+```{r}
+N.Pat.Under5 <- sum(merged$Age.yrs < 5)
+N.Pat.Under5
+```
+
+
+
+#FAB-M7/t(1;22)/AMKL
+
+
+```{r}
+t.1.22 <- function(ISCN){
+  ifelse(grepl("t\\(1;22\\)", ISCN), "yes", "no")
+}
+
+M7.0531 <- clinData.withFusions %>% 
+  filter(FAB.Category == "M7") 
+
+# table(M7.0531$CBFA2T3.GLIS2, M7.0531$FAB.Category, M7.0531$Fusion.Cluster.Category) #8 CBFGLIS are M7 and 5 are t(1:22)
+```
+
+```{r}
+M7.1031 <- CDE.1031 %>%
+  filter(grepl("t\\(1;22\\)",Other.recurrent.abnormalities.))
+
+
+M7.1031
+# table(M7.1031$CBFGLIS.Status, M7.1031$Other.recurrent.abnormalities.)
+```
+
+
+
+
+#Oncoprint
+
+```{r}
+library(ComplexHeatmap)
+```
+
+http://bioconductor.org/packages/release/bioc/vignettes/ComplexHeatmap/inst/doc/s8.oncoprint.html
+
+```{r}
+# merged <- unique(merged)
+rownames(merged) <- merged$TARGET.USI.1
+head(merged)
+```
+
+
+```{r}
+onco.df <- merged[,10:18]
+
+onco.list <- list()
+for (col in colnames(onco.df)){
+  vector <- onco.df[,col]
+  binary <- ifelse(vector == "Yes", 1,0)
+  mat <- t(as.matrix(binary)) %>%
+    set_colnames(rownames(onco.df)) %>% 
+    set_rownames(col)
+  onco.list[[col]] <- mat
+}
+
+class(onco.list$t.8.21.)
+dim(onco.list$t.8.21.)
+onco.list$t.8.21.[,1:15]
+```
+
+
+```{r}
+colors <- c("turquoise3", "yellow", "blue", "firebrick1", 
+                "black","seagreen2", "maroon", "orchid", "cornflowerblue", 
+                "darkblue", "azure4", "chartreuse1", "darkmagenta","orange1", 
+                "deeppink", "darkslategray1", "green4", "navajowhite2",
+                "brown3", "darkgoldenrod3", "deepskyblue1", "lightcoral", 
+                "mediumorchid", "saddlebrown")
+```
+
+
+```{r}
+groups <- names(onco.list)
+
+cc <- NULL
+for (i in 1:length(groups)){
+      c <- colors[i]
+      cc <- c(cc,c)
+}
+
+
+names(cc) <- groups
+```
+
+```{r}
+testset <- c("CBFA2T3.GLIS2", "RAM","t.8.21.")
+```
+
+
+```{r }
+alter_fun1 = list(
+    background = function(x, y, w, h) {
+        grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"), gp = gpar(fill = "#CCCCCC", col = NA))
+    },
+    CBFA2T3.GLIS2 = function(x, y, w, h) {
+        grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"), gp = gpar(fill = "blue", col = NA))
+    },
+    RAM = function(x, y, w, h) {
+        grid.rect(x, y, w-unit(0.5, "mm"), h-unit(0.5, "mm"), gp = gpar(fill = "red", col = NA))
+    },
+    t.8.21. = function(x, y, w, h) {
+        grid.rect(x, y, w-unit(0.5, "mm"), h*0.33, gp = gpar(fill = "#008000", col = NA))
+    }
+)
+
+```
+
+
+
+```{r fig.width=10, fig.height=10}
+# cc[testset]
+# oncoPrint(onco.list[testset],
+          # alter_fun = alter_fun1, col=cc[testset])
+```
+
+
+
+
+
+
+#Try to Use Geom Tile
+
+```{r}
+tile.df <- merged %>% 
+  filter(CBFA2T3.GLIS2 == "Yes") %>% 
+  select_(.dots=colnames(merged)[c(1,10:18)])
+
+head(tile.df)
+```
+
+```{r}
+tile.binary <- as.data.frame(apply(tile.df[,-1], 1, function(x) ifelse(x == "Yes", 1, 0)))
+colnames(tile.binary) <- tile.df$TARGET.USI.1
+tile.binary <- cbind(CytGroup=rownames(tile.binary), tile.binary)
+
+tile.binary[1:5,1:5]
+```
+
+
+```{r}
+library(reshape2)
+tile.tidy <-  tile.binary %>% melt()
+head(tile.tidy)
+```
+
+
+```{r}
+tile.w.perc <- tile.tidy %>% 
+  group_by(CytGroup) %>%
+  mutate(n=n()) %>%
+  mutate(postiveTotal=sum(value)) %>%
+  mutate(percent=sum(value)/n*100) %>%
+  arrange(desc(-percent,-value))
+
+
+CytoOrder <- unique(tile.w.perc$CytGroup)
+
+tile.w.perc
+# CytoOrder
+```
+
+
+```{r}
+patients <- as.data.frame(t(tile.binary[,-1]))
+
+#patient order is the decreasing values for variables ordered by percentage ctypGroup
+patietOrder <- rownames(patients[order(patients$CBFA2T3.GLIS2,
+               patients$RAM, 
+               patients$CEBPA.mutation,
+               patients$FLT3.ITD.positive.,
+               patients$inv.16.,
+               decreasing=TRUE),])
+patietOrder
+```
+
+
+
+
+```{r fig.width=10, fig.height=4}
+tile.tidy$CytGroup <- factor(tile.tidy$CytGroup, levels = CytoOrder)
+tile.tidy$variable <- factor(tile.tidy$variable, levels = patietOrder)
+
+labs <- c("T(8;21)","Inv(16)/T(16;16)", "FLT3-ITD", "NPM1 Mutation", "CEBPA Mutation", 
+          "Monosomy5/Del5q", "Monosomy7", "RAM", "CBFA2T3-GLIS2") %>% set_names(groups)
+
+oncotile <- ggplot(tile.tidy, aes(x=variable, y=CytGroup, fill = value)) + 
+  geom_tile(color="white", size=0.5) +
+  scale_y_discrete(labels=labs) + 
+  labs(title="Co-occuring Cytogenetic Abnormalities", y="", x="") +
+  theme(axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size=16, color="black"),
+        plot.title = element_text(size=18, hjust=0.5))
+
+
+
+# tiff(file="~/RNA_seq_Analysis/2017.02.15_CBF-GLIS_DEG/ASH/CBFGLIS_0531_1031_Oncoprint2.tif", height = 6, width = 10, units = "in", res=400)
+oncotile
+# dev.off()
+# getwd()
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
